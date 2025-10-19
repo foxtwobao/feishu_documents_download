@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "larksync"
+version = "0.1.0"
+description = "Feishu personal cloud sync toolkit"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [{name = "LarkSync Developers"}]
+dependencies = [
+    "httpx>=0.27.0",
+    "pydantic>=2.6.0",
+    "tenacity>=8.2.3",
+    "typer>=0.9.0",
+    "python-dateutil>=2.8.2"
+]
+
+[project.scripts]
+larksync = "larksync.cli:app"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[tool.typer]
+pretty_exceptions_enable = true

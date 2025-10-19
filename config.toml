@@ -1,0 +1,21 @@
+[auth]
+user_access_token = "YOUR_USER_ACCESS_TOKEN"
+
+[storage]
+root = "./output"
+
+[logging]
+level = "INFO"
+structured = true
+
+# 以下配置项暂未接入实际逻辑，保留占位以便后续扩展
+[retry]
+max_attempts = 4
+initial_interval_seconds = 0.5
+backoff_multiplier = 2.0
+
+# 同步相关功能暂未启用，配置占位
+[sync]
+max_nested_depth = 3
+enable_incremental = true
+enable_preview = false

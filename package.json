@@ -1,0 +1,19 @@
+{
+  "name": "feishu_docx_download",
+  "version": "1.0.0",
+  "description": "LarkSync 是一个用于将飞书个人云空间中的 Doc/DocX 文档导出为 Markdown 的命令行工具。目前实现了以下核心能力：",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@larksuiteoapi/lark-mcp": "^0.5.1"
+  }
+}

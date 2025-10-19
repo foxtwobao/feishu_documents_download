@@ -1,0 +1,23 @@
+[auth]
+# user_access_token = "YOUR_USER_ACCESS_TOKEN"
+# tenant_access_token = "YOUR_TENANT_ACCESS_TOKEN"
+
+[storage]
+root = "./output"
+nested_dir = "nested_docs"
+images_dir = "images"
+attachments_dir = "attachments"
+
+[logging]
+level = "INFO"
+structured = true
+
+[retry]
+max_attempts = 4
+initial_interval_seconds = 0.5
+backoff_multiplier = 2.0
+
+[sync]
+max_nested_depth = 3
+enable_incremental = true
+enable_preview = false
