@@ -9,3 +9,5 @@ node_modules/
 docs/
 *.egg-info/
 .DS_Store
+config.toml
+config.toml
