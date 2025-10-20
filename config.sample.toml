@@ -29,3 +29,15 @@ enable_incremental = true
 enable_preview = false
 clean_deleted = false
 force_download_missing = true
+
+[web]
+enabled = false
+secret_key = "change-me"
+scheduler_interval_seconds = 300
+
+[web.oauth]
+app_id = "YOUR_FEISHU_APP_ID"
+app_secret = "YOUR_FEISHU_APP_SECRET"
+callback_url = "http://localhost:8000/auth/callback"
+base_url = "http://localhost:3000"
+token_refresh_margin_minutes = 10

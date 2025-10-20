@@ -15,7 +15,12 @@ dependencies = [
     "pydantic>=2.6.0",
     "tenacity>=8.2.3",
     "typer>=0.9.0",
-    "python-dateutil>=2.8.2"
+    "python-dateutil>=2.8.2",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "sqlalchemy>=2.0.34",
+    "apscheduler>=3.10.4",
+    "itsdangerous>=2.2.0"
 ]
 
 [project.scripts]

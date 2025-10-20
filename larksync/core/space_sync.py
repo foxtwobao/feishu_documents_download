@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Optional, Set
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Set
 
 from ..storage import MetadataStore, StorageManager
 from ..utils.filesystem import sanitize_filename
@@ -35,6 +35,8 @@ class DriveSpaceSynchronizer:
         incremental: bool = True,
         force_on_missing: bool = True,
         clean_deleted: bool = False,
+        progress_callback: Callable[[int, int, Optional[str], str, Optional[str], Optional[str]], None] | None = None,
+        plan_only: bool = False,
     ):
         self._context = context
         self._metadata = metadata_store
@@ -45,6 +47,19 @@ class DriveSpaceSynchronizer:
         self._force_on_missing = force_on_missing
         self._clean_deleted = clean_deleted
         self._current_tokens: Set[str] = set()
+        self._progress_callback = progress_callback
+        self._expected_total = 0
+        self._plan_only = plan_only
+        self._summary: Dict[str, Any] = {
+            "root": {},
+            "total_files": 0,
+            "will_download": 0,
+            "existing": 0,
+            "skipped": 0,
+            "limit": limit,
+            "incremental": incremental,
+            "samples": [],
+        }
 
     def sync(self) -> None:
         root_meta = self._fetch_root_meta()
@@ -53,30 +68,45 @@ class DriveSpaceSynchronizer:
         root_modified = root_meta.get("modified_time")
 
         relative_root = Path(sanitize_filename(root_name) or root_token)
+        self._summary["root"] = {"token": root_token, "name": root_name}
         self._current_tokens = set()
-        self._context.storage.ensure_document_dir(relative_root)
-        self._record_metadata(
-            token=root_token,
-            name=root_name,
-            file_type="folder",
-            parent_path=Path("."),
-            modified_time=root_modified,
-            source_url=None,
-            local_path=relative_root,
-        )
+        if not self._plan_only:
+            self._context.storage.ensure_document_dir(relative_root)
+            self._record_metadata(
+                token=root_token,
+                name=root_name,
+                file_type="folder",
+                parent_path=Path("."),
+                modified_time=root_modified,
+                source_url=None,
+                local_path=relative_root,
+            )
         self._visited.add(root_token)
         self._current_tokens.add(root_token)
         self._walk_folder(root_token, relative_root)
-        if self._incremental:
+        if self._incremental and not self._plan_only:
             self._mark_deleted_tokens()
-        self._metadata.flush()
+        if not self._plan_only:
+            self._metadata.flush()
         self._processed_files = 0
+
+    def summary(self) -> Dict[str, Any]:
+        return {
+            "root": self._summary.get("root"),
+            "total_files": self._summary.get("total_files", 0),
+            "will_download": self._summary.get("will_download", 0),
+            "existing": self._summary.get("existing", 0),
+            "skipped": self._summary.get("skipped", 0),
+            "limit": self._summary.get("limit"),
+            "incremental": self._summary.get("incremental"),
+            "samples": self._summary.get("samples", []),
+        }
 
     # ------------------------------------------------------------------ internals
 
     def _fetch_root_meta(self) -> Dict[str, Optional[str]]:
         payload = self._context.drive.get_root_folder_meta()
-        data = payload.get("data") or {}
+        data = self._ensure_success(payload, "获取根目录信息")
         token = data.get("token") or data.get("folder_token")
         if not token:
             raise RuntimeError("Failed to resolve root folder token")
@@ -88,7 +118,7 @@ class DriveSpaceSynchronizer:
         page_token: Optional[str] = None
         while True:
             payload = self._context.drive.list_folder_children(folder_token, page_token=page_token)
-            data = payload.get("data") or {}
+            data = self._ensure_success(payload, f"获取文件夹 {folder_token} 列表")
             files = data.get("files") or []
             for item in files:
                 self._handle_entry(item, relative_path)
@@ -132,18 +162,19 @@ class DriveSpaceSynchronizer:
         if raw_type == "folder":
             folder_name = sanitize_filename(name) or token
             folder_path = parent_path / folder_name
-            self._context.storage.ensure_document_dir(folder_path)
-            self._record_metadata(
-                token=token,
-                name=name,
-                file_type="folder",
-                parent_path=parent_path,
-                modified_time=modified_time,
-                source_url=source_url,
-                local_path=folder_path,
-                revision=current_meta.get("revision"),
-                checksum=current_meta.get("checksum"),
-            )
+            if not self._plan_only:
+                self._context.storage.ensure_document_dir(folder_path)
+                self._record_metadata(
+                    token=token,
+                    name=name,
+                    file_type="folder",
+                    parent_path=parent_path,
+                    modified_time=modified_time,
+                    source_url=source_url,
+                    local_path=folder_path,
+                    revision=current_meta.get("revision"),
+                    checksum=current_meta.get("checksum"),
+                )
             self._visited.add(token)
             if not self._reached_limit():
                 self._walk_folder(token, folder_path)
@@ -164,49 +195,70 @@ class DriveSpaceSynchronizer:
                 extra["shortcut_token"] = token
                 self._current_tokens.add(actual_token)
             else:
-                self._record_metadata(
-                token=token,
-                name=name,
-                file_type="shortcut",
-                parent_path=parent_path,
-                modified_time=modified_time,
-                source_url=source_url,
-                local_path=self._expected_local_path(token, "shortcut", name, parent_path),
-                revision=current_meta.get("revision"),
-                checksum=current_meta.get("checksum"),
-            )
+                self._plan_file()
+                self._emit_progress("skip", name, raw_type, "无法解析快捷方式目标")
+                detail_path = self._expected_local_path(token, "shortcut", name, parent_path)
+                detail = detail_path.as_posix() if detail_path else None
+                if self._plan_only:
+                    self._track_item("skip", name, raw_type, detail)
+                else:
+                    self._record_metadata(
+                        token=token,
+                        name=name,
+                        file_type="shortcut",
+                        parent_path=parent_path,
+                        modified_time=modified_time,
+                        source_url=source_url,
+                        local_path=detail_path,
+                        revision=current_meta.get("revision"),
+                        checksum=current_meta.get("checksum"),
+                    )
             self._visited.add(token)
             self._count_file()
             return
 
         if not file_type:
-            self._record_metadata(
-                token=token,
-                name=name,
-                file_type=raw_type or "unknown",
-                parent_path=parent_path,
-                modified_time=modified_time,
-                source_url=source_url,
-                local_path=self._expected_local_path(token, raw_type, name, parent_path),
-                revision=current_meta.get("revision"),
-                checksum=current_meta.get("checksum"),
-            )
+            self._plan_file()
+            self._emit_progress("skip", name, raw_type or "unknown", "未知类型，写入占位")
+            detail_path = self._expected_local_path(token, raw_type, name, parent_path)
+            detail = detail_path.as_posix() if detail_path else None
+            if self._plan_only:
+                self._track_item("skip", name, raw_type or "unknown", detail)
+            else:
+                self._record_metadata(
+                    token=token,
+                    name=name,
+                    file_type=raw_type or "unknown",
+                    parent_path=parent_path,
+                    modified_time=modified_time,
+                    source_url=source_url,
+                    local_path=detail_path,
+                    revision=current_meta.get("revision"),
+                    checksum=current_meta.get("checksum"),
+                )
             self._visited.add(token)
             self._count_file()
             return
 
         if actual_token in self._visited:
-            self._record_metadata(
-                token=actual_token,
-                name=name,
-                file_type=file_type,
-                parent_path=parent_path,
-                modified_time=modified_time,
-                source_url=source_url,
-                local_path=self._expected_local_path(actual_token, file_type, name, parent_path),
-                revision=current_meta.get("revision"),
-                checksum=current_meta.get("checksum"),
-            )
+            self._plan_file()
+            self._emit_progress("skip", name, file_type, "已下载，跳过")
+            detail_path = self._expected_local_path(actual_token, file_type, name, parent_path)
+            detail = detail_path.as_posix() if detail_path else None
+            if self._plan_only:
+                self._track_item("existing", name, file_type, detail)
+            else:
+                self._record_metadata(
+                    token=actual_token,
+                    name=name,
+                    file_type=file_type,
+                    parent_path=parent_path,
+                    modified_time=modified_time,
+                    source_url=source_url,
+                    local_path=detail_path,
+                    revision=current_meta.get("revision"),
+                    checksum=current_meta.get("checksum"),
+                )
             self._count_file()
             return
 
@@ -223,23 +275,38 @@ class DriveSpaceSynchronizer:
             force_on_missing=self._force_on_missing,
             parent_path=parent_path,
         ):
-            self._record_metadata(
-                token=actual_token,
-                name=name,
-                file_type=file_type,
-                parent_path=parent_path,
-                modified_time=modified_time,
-                source_url=source_url,
-                local_path=expected_local_path,
-                revision=current_meta.get("revision"),
-                checksum=current_meta.get("checksum"),
-            )
+            self._plan_file()
+            self._emit_progress("skip", name, file_type, "增量策略跳过")
+            detail = expected_local_path.as_posix() if expected_local_path else None
+            if self._plan_only:
+                self._track_item("existing", name, file_type, detail)
+            else:
+                self._record_metadata(
+                    token=actual_token,
+                    name=name,
+                    file_type=file_type,
+                    parent_path=parent_path,
+                    modified_time=modified_time,
+                    source_url=source_url,
+                    local_path=expected_local_path,
+                    revision=current_meta.get("revision"),
+                    checksum=current_meta.get("checksum"),
+                )
             self._visited.add(actual_token)
             if raw_type == "shortcut":
                 self._visited.add(token)
             self._count_file()
             return
 
+        self._plan_file(name, file_type, "已下载，跳过")
+        if self._plan_only:
+            detail = expected_local_path.as_posix() if expected_local_path else None
+            self._track_item("download", name, file_type, detail)
+            self._visited.add(actual_token)
+            if raw_type == "shortcut":
+                self._visited.add(token)
+            self._count_file()
+            return
         task = SyncTask(
             token=actual_token,
             file_type=file_type,
@@ -248,9 +315,11 @@ class DriveSpaceSynchronizer:
             extra={**extra, **({"source_url": source_url} if source_url else {})},
         )
 
+        self._emit_progress("start", name, file_type)
         try:
             self._context.engine.process_task(task)
         except Exception as exc:  # pragma: no cover - defensive
+            self._emit_progress("failed", name, file_type, str(exc))
             self._metadata.mark_missing(
                 actual_token,
                 error=str(exc),
@@ -259,7 +328,6 @@ class DriveSpaceSynchronizer:
                 source_url=source_url,
             )
             raise
-
         local_relative = self._finalize_local_path(expected_local_path, file_type, name, parent_path)
         self._record_metadata(
             token=actual_token,
@@ -272,6 +340,7 @@ class DriveSpaceSynchronizer:
             revision=current_meta.get("revision"),
             checksum=current_meta.get("checksum"),
         )
+        self._emit_progress("success", name, file_type, str(local_relative) if local_relative else None)
         self._visited.add(actual_token)
         if raw_type == "shortcut":
             self._visited.add(token)
@@ -290,6 +359,8 @@ class DriveSpaceSynchronizer:
         revision: Optional[str] = None,
         checksum: Optional[str] = None,
     ) -> None:
+        if self._plan_only:
+            return
         self._metadata.mark_synced(
             token,
             name=name,
@@ -337,6 +408,40 @@ class DriveSpaceSynchronizer:
 
     def _count_file(self) -> None:
         self._processed_files += 1
+        self._emit_progress("progress")
+
+    def _plan_file(
+        self,
+        name: Optional[str] = None,
+        file_type: Optional[str] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        self._expected_total += 1
+        if self._progress_callback:
+            expected = max(self._expected_total, 1)
+            self._progress_callback(self._processed_files, expected, name, "plan", file_type, detail)
+        if self._plan_only:
+            self._summary["total_files"] = self._summary.get("total_files", 0) + 1
+
+    def _track_item(self, action: str, name: str, file_type: Optional[str], detail: Optional[str]) -> None:
+        if not self._plan_only:
+            return
+        if action == "download":
+            self._summary["will_download"] = self._summary.get("will_download", 0) + 1
+        elif action == "existing":
+            self._summary["existing"] = self._summary.get("existing", 0) + 1
+        else:
+            self._summary["skipped"] = self._summary.get("skipped", 0) + 1
+        samples: List[Dict[str, Any]] = self._summary.setdefault("samples", [])
+        if len(samples) < 10:
+            samples.append(
+                {
+                    "name": name,
+                    "file_type": file_type,
+                    "detail": detail,
+                    "action": action,
+                }
+            )
 
     def _expected_local_path(self, token: str, file_type: Optional[str], name: str, parent_path: Path) -> Optional[Path]:
         safe_name = sanitize_filename(name) if name else None
@@ -357,6 +462,32 @@ class DriveSpaceSynchronizer:
         if lowered == "folder":
             return base
         return base
+
+    def _emit_progress(
+        self,
+        stage: str,
+        name: Optional[str] = None,
+        file_type: Optional[str] = None,
+        detail: Optional[str] = None,
+    ) -> None:
+        if not self._progress_callback:
+            return
+        expected = self._expected_total
+        if expected < self._processed_files:
+            expected = self._processed_files
+        if expected == 0:
+            expected = 1
+        self._progress_callback(self._processed_files, expected, name, stage, file_type, detail)
+
+    def _ensure_success(self, payload: Mapping[str, object], context: str) -> Mapping[str, object]:
+        code = payload.get("code") if isinstance(payload, Mapping) else None
+        if code not in (None, 0):
+            msg = payload.get("msg") or payload.get("message") or str(payload)
+            raise RuntimeError(f"{context}失败: code={code}, message={msg}")
+        data = payload.get("data") if isinstance(payload, Mapping) else None
+        if isinstance(data, Mapping):
+            return data
+        return {}
 
     def _finalize_local_path(self, expected: Optional[Path], file_type: str, name: str, parent_path: Path) -> Optional[Path]:
         if expected is None:
@@ -390,6 +521,8 @@ class DriveSpaceSynchronizer:
         return expected
 
     def _mark_deleted_tokens(self) -> None:
+        if self._plan_only:
+            return
         known_tokens = set(self._metadata.tokens())
         stale_tokens = known_tokens - self._current_tokens
         for token in stale_tokens:

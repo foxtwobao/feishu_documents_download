@@ -106,6 +106,29 @@ class LoggingSettings(BaseModel):
     structured: bool = True
 
 
+class WebOAuthSettings(BaseModel):
+    """Web UI / OAuth configuration."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    app_id: Optional[str] = Field(default=None, description="Feishu app ID for OAuth login")
+    app_secret: Optional[str] = Field(default=None, description="Feishu app secret for OAuth login")
+    callback_url: Optional[str] = Field(default=None, description="OAuth redirect URI exposed by the web UI")
+    base_url: str = Field(default="http://localhost:8000", description="Public base URL of the web service")
+    token_refresh_margin_minutes: int = Field(default=10, description="Refresh tokens when they expire within N minutes")
+
+
+class WebSettings(BaseModel):
+    """Top-level web UI settings."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = False
+    oauth: WebOAuthSettings = Field(default_factory=WebOAuthSettings)
+    secret_key: str = Field(default="change-me", description="Secret used to sign session tokens")
+    scheduler_interval_seconds: int = Field(default=300, description="Token refresh scheduler interval in seconds")
+
+
 class LarkSyncConfig(BaseModel):
     """Root configuration model."""
 
@@ -119,6 +142,7 @@ class LarkSyncConfig(BaseModel):
     retry: RetrySettings = Field(default_factory=RetrySettings)
     sync: SyncSettings = Field(default_factory=SyncSettings)
     logging: LoggingSettings = Field(default_factory=LoggingSettings)
+    web: WebSettings = Field(default_factory=WebSettings)
 
 
 def load_config(path: Optional[Path] = None) -> LarkSyncConfig:
