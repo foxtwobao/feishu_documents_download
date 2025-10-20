@@ -25,9 +25,11 @@ dependencies = [
 
 [project.scripts]
 larksync = "larksync.cli:app"
+larksync-gui = "larksync.local_app.gui:run"
 
 [project.optional-dependencies]
 dev = ["pytest>=7.4"]
+desktop = ["pyinstaller>=6.9.0"]
 
 [tool.typer]
 pretty_exceptions_enable = true

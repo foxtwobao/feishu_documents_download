@@ -123,6 +123,37 @@ larksync sync-space --config config.toml --no-incremental
 - 本地缺失文件会自动补齐；云端删除的条目可按 `clean_deleted` 设置标记或清理。
 - 遇到权限不足或无法导出的资源时写入占位 Markdown 并记录日志（`last_error` 字段可辅助排查）。
 
+### 桌面工具（本地运行）
+
+桌面版提供“开箱即用”的体验，启动后只需填写 User Access Token、选择本地保存目录，即可下载指定文档或同步整个个人空间（支持增量或全量模式）。
+
+#### 直接打包成免安装程序
+
+维护者可在对应系统上运行下列命令，生成可直接分发给最终用户的独立应用（无需预装 Python 及依赖）：
+
+```bash
+pip install -e .[desktop]
+python scripts/build_desktop_bundle.py
+```
+
+脚本会调用 PyInstaller 在 `dist/desktop/<platform>/` 目录输出可执行文件，并额外生成 Zip 归档，适用于 Windows、macOS、Linux 各自的平台。
+
+#### 在开发环境中直接启动（调试用途）
+
+如需在虚拟环境中调试，可继续使用项目自带的入口：
+
+```bash
+pip install -e .
+larksync-gui
+```
+
+新版界面提供：
+
+- 基础设置区：填写 User Access Token、选择本地保存路径，可选加载现有 `config.toml`。
+- “下载单个文档”页签：支持直接粘贴飞书链接或 token，并可自定义导出文件名。
+- “同步个人空间”页签：增量/全量切换、清空缓存后同步以及下载数量限制。
+- 状态栏与日志窗口：实时展示当前进度、错误提示与详细日志，便于排查。
+
 ## 测试
 
 项目提供基础解析器与下载流程的单元测试：
