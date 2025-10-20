@@ -131,6 +131,77 @@ larksync sync-space --config config.toml --no-incremental
 pytest
 ```
 
+## Docker
+
+仓库已提供 `Dockerfile`，可以构建一个同时包含 Python 后端与 Next.js 前端的镜像，方便在无本地开发环境的机器上运行。
+
+### 构建镜像
+
+```bash
+docker build -t larksync:latest .
+```
+
+### 运行 Web 服务
+
+镜像默认会启动 FastAPI 后端（默认监听 `0.0.0.0:8000`）和 Next.js 前端（默认监听 `0.0.0.0:3000`）。运行时请映射对应端口，并挂载配置与输出目录：
+
+```bash
+docker run --rm \
+  -p 8000:8000 \
+  -p 3000:3000 \
+  -v $(pwd)/config.toml:/app/config.toml:ro \
+  -v $(pwd)/output:/app/output \
+  -e LARKSYNC_STORAGE_ROOT=/app/output \
+  larksync:latest
+```
+
+容器允许通过环境变量配置监听地址与端口：
+
+- `BACKEND_HOST` / `BACKEND_PORT`：FastAPI 服务的监听地址与端口（默认 `0.0.0.0:8000`）。
+- `FRONTEND_HOST` / `FRONTEND_PORT`：Next.js 服务的监听地址与端口（默认 `0.0.0.0:3000`）。
+- `NEXT_PUBLIC_API_BASE_URL`：前端访问后端 API 的地址，默认会根据 `BACKEND_PORT` 设置为 `http://localhost:<后端端口>`。
+
+例如在宿主机上使用自定义端口：
+
+```bash
+docker run --rm \
+  -p 9000:9000 \
+  -p 4000:4000 \
+  -e BACKEND_PORT=9000 \
+  -e FRONTEND_PORT=4000 \
+  -e NEXT_PUBLIC_API_BASE_URL=http://localhost:9000 \
+  larksync:latest
+```
+
+### 运行命令行
+
+如需在容器中调用 CLI，可覆盖入口点：
+
+```bash
+docker run --rm \
+  --entrypoint larksync \
+  -v $(pwd)/output:/app/output \
+  -e LARKSYNC_STORAGE_ROOT=/app/output \
+  larksync:latest download --type docx <token>
+```
+
+同样可以通过环境变量传入访问令牌等敏感信息：
+
+```bash
+docker run --rm \
+  --entrypoint larksync \
+  -v $(pwd)/output:/app/output \
+  -e LARKSYNC_USER_ACCESS_TOKEN=xxx \
+  -e LARKSYNC_STORAGE_ROOT=/app/output \
+  larksync:latest sync-space --config /app/config.toml --limit 50
+```
+
+也可以追加 `-it` 进入交互式 shell：
+
+```bash
+docker run --rm -it larksync:latest /bin/bash
+```
+
 ## 已实现能力摘要
 
 - DocX/Doc Markdown 转换（含嵌套链接、图片、附件、白板 JSON/PNG）。
