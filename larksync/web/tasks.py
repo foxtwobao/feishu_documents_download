@@ -447,13 +447,10 @@ class TaskManager:
         if expected <= 0:
             expected = max(processed, 1)
         runtime = self._runtime_state.setdefault(task_id, {})
-        planned_total = runtime.get("planned_total")
-        expected_for_progress = planned_total or expected
-        if not expected_for_progress or expected_for_progress <= 0:
-            expected_for_progress = max(expected, processed, 1)
-        else:
-            expected_for_progress = max(expected_for_progress, processed, expected or 0)
-        progress_pct = min(int((processed / expected_for_progress) * 100), 100)
+        completed, expected_for_progress = _update_progress_counters(
+            runtime, stage, processed, expected
+        )
+        progress_pct = min(int((completed / expected_for_progress) * 100), 100)
 
         with session_scope() as session:
             task = session.get(SyncTask, task_id)
@@ -462,7 +459,7 @@ class TaskManager:
             if progress_pct > task.progress:
                 task.progress = progress_pct
                 session.add(task)
-            runtime["processed"] = processed
+            runtime["processed"] = completed
             runtime["expected"] = expected_for_progress
             runtime["current_stage"] = stage
             if name:
@@ -643,8 +640,47 @@ def _extract_planned_total(payload: Dict[str, Any]) -> Optional[int]:
             return None
     if not isinstance(plan, dict):
         return None
-    for key in ("will_download", "total_files"):
+    preferred_keys = ("total_files", "will_download")
+    for key in preferred_keys:
         value = plan.get(key)
         if isinstance(value, (int, float)) and value >= 0:
             return int(value)
     return None
+
+
+def _update_progress_counters(
+    runtime: Dict[str, Any], stage: str, processed: int, expected: int
+) -> tuple[int, int]:
+    """Track per-task progress based on reported stage transitions."""
+
+    planned_total = runtime.get("planned_total")
+    completed = int(runtime.get("completed", 0))
+    engine_processed = int(runtime.get("engine_processed", 0))
+
+    if stage == "plan":
+        if expected > 0:
+            planned_total = max(int(expected), int(planned_total or 0))
+            runtime["planned_total"] = planned_total
+        if processed <= 0:
+            completed = 0
+            engine_processed = 0
+
+    if stage in {"success", "failed", "skip"}:
+        completed += 1
+    elif processed > engine_processed:
+        completed = max(completed, int(processed))
+
+    runtime["completed"] = completed
+    runtime["engine_processed"] = max(engine_processed, int(processed))
+
+    expected_tracker = runtime.get("expected")
+    expected_for_progress = planned_total or expected_tracker or expected
+    if not expected_for_progress or expected_for_progress <= 0:
+        expected_for_progress = max(expected, completed, 1)
+    else:
+        expected_for_progress = max(
+            int(expected_for_progress), int(expected or 0), completed, int(processed)
+        )
+    runtime["expected"] = expected_for_progress
+
+    return completed, expected_for_progress
