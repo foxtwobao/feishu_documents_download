@@ -93,6 +93,8 @@ class SyncSettings(BaseModel):
     max_nested_depth: int = 3
     enable_incremental: bool = True
     enable_preview: bool = False
+    clean_deleted: bool = False
+    force_download_missing: bool = True
 
 
 class LoggingSettings(BaseModel):

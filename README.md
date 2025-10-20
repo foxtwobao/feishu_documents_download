@@ -34,7 +34,9 @@ pip install -e ".[dev]"
 
 - 默认读取仓库根目录的 `config.toml`（可通过 `LARKSYNC_CONFIG` 环境变量指定其它路径）。
 - 最少需要在 `[auth]` 下提供 `user_access_token`，以及 `[storage]` 的 `root`（下载目录）。
-- `config.toml` 中已保留若干占位配置（并发、特性开关等），当前版本尚未启用，提交前可保持默认。
+- `[rate_limit]` 段用于配置每秒最大请求数，客户端会据此自动节流。（例如 docx=5 表示 DocX 接口单租户每秒最多 5 次请求）。
+- `[sync]` 可控制增量下载：`enable_incremental`、`force_download_missing`（本地缺失时补全）、`clean_deleted`（云端删除时是否清理本地）。
+- 其他并发/特性配置依旧占位，后续实现可直接启用。
 
 示例：
 
@@ -48,6 +50,17 @@ root = "./output"
 [logging]
 level = "INFO"
 structured = true
+
+[rate_limit]
+docx = 5
+sheet = 5
+bitable = 5
+file = 5
+
+[sync]
+enable_incremental = true
+force_download_missing = true
+clean_deleted = false
 ```
 
 常用环境变量覆盖：
@@ -90,15 +103,25 @@ output/
 ### 遍历个人空间（测试/分步下载）
 
 ```bash
-# 下载个人空间前 50 个可访问文件 / 子目录
+# 下载个人空间前 50 个可访问文件 / 子目录（默认启用增量）
 larksync sync-space --config config.toml --limit 50
+
+# 取消限制（0 表示无限制）并强制全量
+larksync sync-space --config config.toml --limit 0 --full
+
+# 仅重建元数据，不下载
+larksync sync-space --config config.toml --limit 0 --reset-metadata
+
+# 临时关闭增量（保持 metadata，但本次全部重下）
+larksync sync-space --config config.toml --no-incremental
 ```
 
 该命令会：
 
 - 基于 `limit` 控制下载条数（测试环境建议保留限制，生产环境可设置为 0 或省略以下载全部）。
-- 在 `output/.metadata.json` 记录每个条目的 `token`、`file_type`、`parent_path`、`modified_time`。
-- 遇到权限不足或无法导出的资源时写入占位 Markdown 并记录日志。
+- 在 `output/.metadata.json` 记录每个条目的 `token`、`file_type`、`parent_path`、`modified_time`、`local_path` 等，并据此进行增量对比。
+- 本地缺失文件会自动补齐；云端删除的条目可按 `clean_deleted` 设置标记或清理。
+- 遇到权限不足或无法导出的资源时写入占位 Markdown 并记录日志（`last_error` 字段可辅助排查）。
 
 ## 测试
 
@@ -114,12 +137,18 @@ pytest
 - Sheet/Bitable 导出 `.xlsx`；File 原样下载；Slides/Mindnote 生成说明性 Markdown。
 - Folder/Shortcut/Wiki 节点遍历与本地化。
 - 快捷方式自动识别目标类型并拉取实际内容。
-- `.metadata.json` 保留下载条目的最后修改时间，支持后续增量同步拓展。
+- `.metadata.json` 保留下载条目的最后修改时间、revision、路径等信息，并驱动增量同步策略。
 
 ## 已知限制 / TODO
 
-- 配置中的并发、速率、增量开关尚未生效（仅占位）。
+- 并发控制仍为后续规划（当前以串行方式执行）。
 - 部分资源可能因权限不足出现“下载失败”占位，需要手动确认权限。
 - 实际全量同步仍有性能优化空间（限速、重试、日志指标等）。
 
 欢迎根据 `requirement.md` 中的 roadmap 持续完善。***
+
+## 修订记录
+
+| 日期         | 版本 | 说明                                   |
+|--------------|------|----------------------------------------|
+| 2025-10-20   | 1.1  | 增量同步落地：metadata 扩展、增量/全量 CLI 参数、即时落盘，配合 rate limit 重试策略 |

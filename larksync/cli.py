@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 import typer
 
@@ -76,12 +77,30 @@ def download_docx(
 @app.command("sync-space")
 def sync_space(
     config_path: Path | None = typer.Option(None, "--config", "-c", help="Path to config.toml"),
-    limit: int = typer.Option(10, "--limit", help="Maximum number of files to download (default: 10)"),
+    limit: int = typer.Option(10, "--limit", help="Maximum number of files to download (default: 10; 0 for no limit)"),
+    incremental: Optional[bool] = typer.Option(
+        None,
+        "--incremental/--no-incremental",
+        help="Enable or disable incremental sync for this run (overrides config)",
+    ),
+    full: bool = typer.Option(False, "--full", help="Perform a full sync regardless of metadata"),
+    reset_metadata: bool = typer.Option(False, "--reset-metadata", help="Clear cached metadata before syncing"),
 ) -> None:
     """Traverse personal space and download every accessible document."""
 
     config, engine = _build_engine(config_path)
     metadata_store = MetadataStore(engine.storage.root)
+    if reset_metadata:
+        metadata_store.clear()
+        metadata_store.flush()
+
+    effective_incremental = config.sync.enable_incremental
+    if incremental is not None:
+        effective_incremental = incremental
+    if full:
+        effective_incremental = False
+
+    limit_value = None if limit <= 0 else limit
     context = SpaceSyncContext(
         engine=engine,
         drive=engine.drive_adapter,
@@ -89,7 +108,14 @@ def sync_space(
         storage=engine.storage,
     )
 
-    synchronizer = DriveSpaceSynchronizer(context, metadata_store, limit=limit if limit > 0 else None)
+    synchronizer = DriveSpaceSynchronizer(
+        context,
+        metadata_store,
+        limit=limit_value,
+        incremental=effective_incremental,
+        force_on_missing=config.sync.force_download_missing,
+        clean_deleted=config.sync.clean_deleted,
+    )
     try:
         synchronizer.sync()
     finally:

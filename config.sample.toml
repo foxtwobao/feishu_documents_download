@@ -17,7 +17,15 @@ max_attempts = 4
 initial_interval_seconds = 0.5
 backoff_multiplier = 2.0
 
+[rate_limit]
+docx = 5
+sheet = 5
+bitable = 5
+file = 5
+
 [sync]
 max_nested_depth = 3
 enable_incremental = true
 enable_preview = false
+clean_deleted = false
+force_download_missing = true
