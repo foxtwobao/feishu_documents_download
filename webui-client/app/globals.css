@@ -1,0 +1,125 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 226, 232, 240;
+  --background-start-rgb: 15, 20, 25;
+  --background-end-rgb: 26, 31, 46;
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+    to bottom right,
+    rgb(var(--background-start-rgb)),
+    rgb(var(--background-end-rgb))
+  );
+  min-height: 100vh;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1f2e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3d4a5c;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #4a5a70;
+}
+
+/* Animation utilities */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { 
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes pulse-slow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.4s ease-out;
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s ease-in-out infinite;
+}
+
+/* Status badge colors */
+.status-queued { @apply bg-amber-500/20 text-amber-300; }
+.status-pending { @apply bg-yellow-500/20 text-yellow-400; }
+.status-running { @apply bg-blue-500/20 text-blue-400; }
+.status-completed { @apply bg-green-500/20 text-green-400; }
+.status-failed { @apply bg-red-500/20 text-red-400; }
+.status-auth_required { @apply bg-orange-500/20 text-orange-400; }
+.status-cancelled { @apply bg-gray-500/20 text-gray-400; }
+
+/* Card styles */
+.card {
+  @apply bg-dark-surface/80 backdrop-blur-sm rounded-xl border border-dark-border/50 shadow-lg;
+}
+
+.card-hover {
+  @apply hover:border-feishu-blue/30 hover:shadow-feishu-blue/10 transition-all duration-200;
+}
+
+/* Button styles */
+.btn {
+  @apply px-4 py-2 rounded-lg font-medium transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+.btn-primary {
+  @apply bg-feishu-blue hover:bg-feishu-blue-hover text-white;
+}
+
+.btn-secondary {
+  @apply bg-dark-border hover:bg-dark-muted/30 text-dark-text;
+}
+
+.btn-danger {
+  @apply bg-feishu-red/20 hover:bg-feishu-red/30 text-feishu-red;
+}
+
+/* Input styles */
+.input {
+  @apply w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-dark-text placeholder-dark-muted focus:outline-none focus:border-feishu-blue focus:ring-1 focus:ring-feishu-blue/50 transition-all duration-200;
+}
+
+.select {
+  @apply w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-dark-text focus:outline-none focus:border-feishu-blue focus:ring-1 focus:ring-feishu-blue/50 transition-all duration-200 appearance-none cursor-pointer;
+}
+
+/* Progress bar */
+.progress-bar {
+  @apply h-2 bg-dark-border rounded-full overflow-hidden;
+}
+
+.progress-bar-fill {
+  @apply h-full bg-gradient-to-r from-feishu-blue to-feishu-green transition-all duration-300;
+}

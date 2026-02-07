@@ -1,0 +1,170 @@
+# =============================================================================
+# LarkSync 配置文件示例
+# =============================================================================
+# 部署方式：
+#   - 本地开发：复制为 config.toml，使用默认的 ./data 目录
+#   - Docker：使用 config.docker.toml 模板，映射 /data 目录
+#
+# 目录结构（Docker 部署推荐）：
+#   /data/                     或 ./data/
+#   ├── config/
+#   │   └── config.toml        # 配置文件
+#   ├── sync/                  # CLI 同步文件（如未设置 download_root）
+#   │   └── .sync.db           # 同步元数据
+#   ├── files/                 # 统一下载目录（设置 download_root 时）
+#   └── web/
+#       ├── larksync.db        # Web 数据库
+#       └── users/             # 多用户存储（可被 download_root 覆盖）
+# =============================================================================
+
+[auth]
+# Feishu OAuth 应用的凭据。CLI 通过浏览器授权时必须配置。
+app_id = "cli_xxxxxxxxxxxxxxxxx"
+app_secret = "your_app_secret_here"
+
+# 直接指定用户访问令牌（跳过 OAuth，适合临时脚本或只运行 CLI）。
+# user_access_token = "u-xxxxxxxxxxxxxxxxxxxxxxxx"
+
+# 企业自建应用可使用租户级 token，通常无需填写。
+# tenant_access_token = "t-xxxxxxxxxxxxxxxxxxxxxxxx"
+
+# CLI OAuth 回调地址（飞书授权后浏览器跳转的地址）。
+# CLI 会在本地启动临时服务器接收回调，如使用反向代理需配置代理转发到本地端口。
+# 不配置时默认为 http://localhost:{cli_oauth_listen_port}/callback
+# oauth_callback_url = "https://cli-callback.example.com/auth/callback"
+
+# CLI OAuth 本地监听端口（默认 8899），监听地址固定为 0.0.0.0。
+# 反向代理应将 oauth_callback_url 转发到此端口。
+# cli_oauth_listen_port = 8899
+
+# 注意：CLI 和 Web 需要使用不同的回调地址：
+# - CLI：回调转发到本地 8899 端口（CLI 启动的临时服务器）
+# - Web：回调转发到 Web 服务端口（默认 8000）的 /auth/callback
+# 需要在飞书开放平台配置两个回调地址。
+
+[storage]
+# 下载内容保存的根目录
+# 本地开发：./data/sync
+# Docker：/data/sync
+root = "./data/sync"
+
+# 统一控制 CLI/Web 下载文件的根目录（可选）。
+# 设置后：
+# - CLI 下载目录：{download_root}/cli
+# - Web 用户目录：{download_root}/web（除非显式设置 web.user_storage_base）
+download_root = "./data"
+
+# 嵌套引用的 DocX/Sheet 等资源保存目录（相对于 root）。
+nested_dir = "nested_docs"
+
+# 转换 Markdown 时提取的图片保存目录。
+images_dir = "images"
+
+# 下载附件保存目录。
+attachments_dir = "attachments"
+
+# 是否尽量保留飞书的远端层级结构。
+preserve_remote_structure = true
+
+# Metadata 存储后端："json"（传统）或 "sqlite"（推荐）。
+# SQLite 提供更好的并发安全性、性能和查询能力。
+metadata_backend = "json"
+
+# JSON 格式的 metadata 文件名（相对于 root）。
+metadata_json_file = ".metadata.json"
+
+# SQLite 格式的 metadata 数据库文件名（相对于 root）。
+metadata_sqlite_file = ".sync.db"
+
+# 是否记录同步历史（仅 SQLite 后端支持）。
+metadata_enable_history = false
+
+# 切换到 SQLite 时是否自动迁移 JSON 数据。
+metadata_auto_migrate = true
+
+[logging]
+# CLI 日志级别：DEBUG / INFO / WARNING / ERROR。
+level = "INFO"
+
+# 是否输出结构化 JSON 日志，便于日志采集系统解析。
+structured = true
+
+[retry]
+# 网络请求或下载失败时的重试次数与退避策略。
+max_attempts = 4
+initial_interval_seconds = 0.5
+backoff_multiplier = 2.0
+
+[rate_limit]
+# 针对不同文档类型的客户端速率限制（每秒最大请求数）。
+docx = 5
+sheet = 5
+bitable = 5
+file = 5
+
+[sync]
+# 最大递归深度（处理嵌套引用或目录时使用）。
+max_nested_depth = 3
+
+# 是否启用增量同步（根据 metadata 判断是否跳过已下载文件）。
+enable_incremental = true
+
+# 是否在云端文件删除时清理本地文件。
+clean_deleted = false
+
+# 本地缺失文件是否强制重新下载。
+force_download_missing = true
+
+# ==================== Web 多用户同步系统配置 ====================
+[web]
+# 是否启用 Web UI。
+enabled = false
+
+# Web 系统数据库 URL（存储用户、任务配置等）。
+# 默认：sqlite:////data/web/larksync.db
+# 本地开发可改为：sqlite:///./data/web/larksync.db
+database_url = "sqlite:////data/web/larksync.db"
+
+# 多用户存储根目录（每个用户数据保存在 {user_storage_base}/{user_id}/ 下）。
+# 本地开发：./data/web/users
+# Docker：/data/web/users
+user_storage_base = "./data/web/users"
+
+# 允许使用 Web 同步系统的用户白名单（Feishu user_id，逗号分隔；"*" 表示全部允许）。
+# 未配置或不包含当前用户时，Web 端将提示无权限使用系统。
+# allow_download_user_ids = "*"
+
+# 允许配置知识库同步的用户白名单（Feishu user_id，逗号分隔）。
+# 未配置或不包含当前用户时，Web 端将禁用知识库同步。
+# allow_download_wiki_user_ids = "ou_xxx,ou_yyy"
+
+# 会话签名密钥（生产环境请修改为安全的随机字符串）。
+# secret_key = "your-secret-key-here"
+
+[web.oauth]
+# Web 端飞书 OAuth 应用凭据（可与 CLI 共用同一应用）。
+app_id = "cli_xxxxxxxxxxxxxxxxx"
+app_secret = "your_app_secret_here"
+
+# Web OAuth 回调地址（必须与飞书开放平台配置的重定向 URI 一致）。
+# 重要：此地址必须与 CLI 的 oauth_callback_url 不同！
+# - CLI 回调转发到本地 8899 端口（临时服务器）
+# - Web 回调需转发到 Web 服务端口（8000）的 /api/auth/callback
+# 示例：https://web.example.com/api/auth/callback -> localhost:8000/api/auth/callback
+callback_url = "http://localhost:8000/api/auth/callback"
+
+# Token 刷新提前量（分钟）：在过期前多久自动刷新。
+token_refresh_margin_minutes = 10
+
+[web.scheduler]
+# 调度器检查间隔（秒）。
+check_interval = 60
+
+# Token 自动刷新检查间隔（秒）。
+token_refresh_interval = 300
+
+# 是否强制同步任务按队列串行执行（默认 true）。
+force_queue = true
+
+# 最大并发同步任务数。
+max_concurrent_jobs = 3

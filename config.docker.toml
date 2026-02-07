@@ -1,0 +1,103 @@
+# =============================================================================
+# LarkSync Docker 部署配置模板
+# =============================================================================
+# 使用方法：
+#   1. 复制此文件到 /data/config/config.toml
+#   2. 修改 [auth] 和 [web.oauth] 中的飞书应用凭据
+#   3. Docker 运行时映射 /data 目录
+#
+# 目录结构：
+#   /data/
+#   ├── config/
+#   │   └── config.toml      # 此配置文件
+#   ├── sync/                # CLI 同步文件存储
+#   │   ├── .sync.db         # 同步元数据
+#   │   └── wiki_xxx/        # 下载的知识库文件
+#   └── web/
+#       ├── larksync.db      # Web 用户/配置数据库
+#       └── users/           # 多用户存储
+#           └── {user_id}/
+#
+# Docker 运行示例：
+#   docker run -d \
+#     -v /path/to/data:/data \
+#     -p 8000:8000 \
+#     -e LARKSYNC_CONFIG=/data/config/config.toml \
+#     larksync:latest
+# =============================================================================
+
+[auth]
+# Feishu OAuth 应用凭据（必填）
+app_id = "cli_xxxxxxxxxxxxxxxxx"
+app_secret = "your_app_secret_here"
+
+# CLI OAuth 回调地址（用于 CLI 授权）
+# oauth_callback_url = "https://cli-callback.example.com/auth/callback"
+
+[storage]
+# 同步文件存储根目录
+root = "/data/sync"
+
+# 统一控制 CLI/Web 下载文件的根目录（可选）。
+# 设置后：
+# - CLI 下载目录：{download_root}/cli
+# - Web 用户目录：{download_root}/web（除非显式设置 web.user_storage_base）
+download_root = "/download"
+
+# 推荐使用 SQLite 后端
+metadata_backend = "sqlite"
+metadata_sqlite_file = ".sync.db"
+metadata_enable_history = false
+
+[logging]
+level = "INFO"
+structured = true
+
+[retry]
+max_attempts = 4
+initial_interval_seconds = 0.5
+backoff_multiplier = 2.0
+
+[sync]
+max_nested_depth = 3
+enable_incremental = true
+clean_deleted = false
+force_download_missing = true
+
+# ==================== Web UI 配置 ====================
+[web]
+enabled = true
+
+# Web 数据库（用户、配置、运行记录）
+database_url = "sqlite:////data/web/larksync.db"
+
+# 多用户存储根目录
+user_storage_base = "/data/web/users"
+
+# 允许使用 Web 同步系统的用户白名单（Feishu user_id，逗号分隔；"*" 表示全部允许）。
+# 未配置或不包含当前用户时，Web 端将提示无权限使用系统。
+# allow_download_user_ids = "*"
+
+# 允许配置知识库同步的用户白名单（Feishu user_id，逗号分隔）。
+# 未配置或不包含当前用户时，Web 端将禁用知识库同步。
+# allow_download_wiki_user_ids = "ou_xxx,ou_yyy"
+
+# 会话签名密钥（生产环境必须修改！）
+# secret_key = "your-random-secret-key-here"
+
+[web.oauth]
+# Web 端飞书 OAuth 凭据（可与 CLI 共用）
+app_id = "cli_xxxxxxxxxxxxxxxxx"
+app_secret = "your_app_secret_here"
+
+# Web OAuth 回调地址
+callback_url = "https://your-domain.com/api/auth/callback"
+
+# Token 刷新提前量（分钟）
+token_refresh_margin_minutes = 10
+
+[web.scheduler]
+check_interval = 60
+token_refresh_interval = 300
+force_queue = true
+max_concurrent_jobs = 3
