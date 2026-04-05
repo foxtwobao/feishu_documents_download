@@ -17,14 +17,19 @@
 | 文档类型 | 输出文件名 | 示例 |
 |---------|-----------|------|
 | DocX | `{sanitized_title}_{token}.md` | `产品需求文档_abc12345.md` |
-| Sheet/Bitable/Base | `{sanitized_title}_{token}.xlsx` | `数据表_xyz98765.xlsx` |
-| File (assets) | `original_{token}_{ext}` | `original_abc12345.pdf` |
+| Sheet/Bitable/Base/sheets | `{sanitized_title}_{token}.xlsx` | `数据表_xyz98765.xlsx` |
+| Slides/Mindnote | `{sanitized_title}_{token}.md` | `演示文稿_abc12345.md` |
+| File (assets) | `original_{token}.{ext}` | `original_abc12345.pdf` |
 | 其他 | `{sanitized_title}_{token}.md` | 同 DocX |
 
 ### 去重逻辑
 
 - **Token 唯一性**：`{title}_{token}` 保证同一 token 的文档始终解析到同一路径，不会重复下载
 - **路径注册**：`_register_and_resolve_path()` 保持不变，继续处理同名不同 token 的冲突
+
+### 向后兼容
+
+- `_resolve_reference_output()` 在查找文件时，优先查找新命名（`{title}_{token}.{ext}`），若找不到则 fallback 到旧命名（`content.md` / `content.xlsx`），避免已下载文档失效或重复下载
 
 ### 代码修改
 
