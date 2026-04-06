@@ -1,150 +1,176 @@
-目标：仅修改本地 Path 结构（不改现有能力），明确 refer/assets vs refer/larkfiles，支持递归嵌入
+目标：为 Obsidian 使用场景重新定义本地落盘结构。
 
-你需要在保持现有代码“能正常运行”的前提下，**只修改本地文件/文件夹的 path 结构与落盘位置**。
-**禁止**修改 token 提取逻辑、解析逻辑、下载逻辑、触发下载的范围与类型支持能力。
-**只支持导出 Markdown**，不要 pdf/docx/html、多格式导出，不做缩略图/转码。
+这次不是继续沿用 `refer/assets/<token>/original.*` 与 `refer/larkfiles/<token>/content.md` 模式，而是把下载结果拆成三类：
+
+1. **飞书树节点** → 主树
+2. **树外独立云文档引用** → 顶层 flat `refer/`
+3. **宿主文档资源** → `<doc>.assets/`
 
 ---
 
-# 1) 目标目录结构（必须严格遵守）
+# 1) 目标目录结构
 
-```
+```text
 <root>/
-  <entry_tree>/                          # 与飞书目录层级一致
+  <entry_tree>/
     <title>_<folder_token>/
-      <title>_<file_token>.<ext>
-      <title>_<doc_token>.md             # docx 导出的 Markdown（入口文件）
+      <title>_<doc_token>.md
+      <title>_<doc_token>.assets/
+        <resource files>
 
   refer/
-    assets/
-      <token>/
-        original.<ext>
-    larkfiles/
-      <token>/
-        content.md
+    <title>_<token>.md
+    <title>_<token>.xlsx
+    <original_filename_or_fallback>
 ```
 
-## 命名强约束
+---
 
-* 所有 **Entry Tree** 的文件夹必须命名为：`<title>_<folder_token>/`
-* 所有 **Entry Tree** 的文件必须命名为：`<title>_<file_token>.<ext>`
-* 所有 **Entry Tree** 的 docx 导出必须命名为：`<title>_<doc_token>.md`
-* refer/assets 的文件名固定为：`original.<ext>`
-* refer/larkfiles 的文件名固定为：`content.md`
-* refer 下的目录名必须是 token 本身：`<token>/`
-* title 的 sanitize/截断等逻辑沿用现有实现即可（不要大改），但必须确保 `_token` 后缀存在。
+# 2) 主树规则
+
+## 飞书文件夹
+
+* 落为本地目录
+* 目录名使用：`<title>_<folder_token>/`
+
+## 飞书树中的文件 / 云文档
+
+* 落为主树中的真实文件
+* 文件名使用：`<title>_<token>.<ext>`
+* 不要为了资源管理把主文档再包成“每个文档一个目录”
 
 ---
 
-# 2) refer 归类规则（assets vs larkfiles）——按“产物类型”划分
+# 3) `refer/` 规则
 
-## 核心原则（必须执行）
+`refer/` 只放“**不属于当前主树节点**、但可以独立打开和复用的云文档对象”。
 
-* **最终落盘为二进制文件的下载结果 → refer/assets/**
-* **最终落盘为 Markdown 的导出结果 → refer/larkfiles/**
+包括：
 
----
+* doc / docx
+* sheet / sheets
+* bitable / base
+* slides
+* mindnote
+* 语义上属于“独立对象”的 file 链接
 
-# 3) 与现有 docx 实现对齐的明确归类表（必须按此实现）
+## 命名规则
 
-以下“类型与 token 来源”与你现有实现一致；你只改落盘路径。
+统一使用：
 
-## A) 图片块（含行内图片）
+* `{safe_name}_{token}.md`
+* `{safe_name}_{token}.xlsx`
+* file 类型优先原始文件名；若不可得，再用 `{safe_name}_{token}{ext}`
 
-* token 来源：`image.token` / `image_token` / `file_token`（缺失回退 block_id 也保持现有行为）
-* **落盘：** `refer/assets/<token>/original.<ext>`
+## 结构约束
 
-## B) 附件块
-
-* token 来源：`file_token` / `token`（缺失回退 block_id 也保持现有行为）
-* **落盘：** `refer/assets/<token>/original.<ext>`
-
-## C) 文档内链接“引用下载”（从 URL 抽 token）
-
-现有支持类型：`doc/docx、sheet/sheets、base/bitable、mindnote/mindnotes、slides、file`
-
-* 若类型为 `file`：
-
-  * **落盘：** `refer/assets/<token>/original.<ext>`
-* 若类型为 `doc/docx/sheet/sheets/base/bitable/mindnote/mindnotes/slides`：
-
-  * **落盘：** `refer/larkfiles/<token>/content.md` （导出 Markdown）
-
-## D) 表格块（sheet）
-
-* token 来源：`token/sheet_token/sheet_id`（拆为 spreadsheet_token + sheet_id；现有逻辑不改）
-* **落盘：** `refer/larkfiles/<spreadsheet_token>/content.md`
-
-## E) 白板块（board/whiteboard）
-
-* 当前实现会下载文件（缩略图/JSON等），不改下载行为
-* **落盘：** 统一归入 assets
-  `refer/assets/<token>/original.<ext>`（或同目录下以现有方式保存，但目录必须是 `refer/assets/<token>/`）
-
-## F) 占位类型
-
-* 保持现状：不触发下载
-* **不产生 refer 落盘**
+* `refer/` 默认 **flat**
+* 不再使用：
+  * `refer/larkfiles/<token>/content.md`
+  * `refer/assets/<token>/original.<ext>`
+* 不再新增深层 `refer/docs/`、`refer/sheets/` 等多级目录，除非后续规模过大另行设计
 
 ---
 
-# 4) 为什么 refer/larkfiles 用 content.md（必须遵守，不要改成 title_token.md）
+# 4) `<doc>.assets/` 规则
 
-* refer 是按 token 的全局去重缓存池，路径必须稳定，不随 title 改名而变化
-* 因此 larkfiles 固定：`refer/larkfiles/<token>/content.md`
-* Entry Tree 才使用 `<title>_<token>.md`（面向用户可读）
+宿主文档资源统一跟宿主文档走。
 
----
+目录名：
 
-# 5) 递归嵌入规则（关键，必须实现）
+```text
+<doc_filename_without_ext>.assets/
+```
 
-无论嵌入发生在：
+例如：
 
-* Entry Tree 的 `<title>_<doc_token>.md`
-  还是发生在：
-* `refer/larkfiles/<token>/content.md`
+```text
+需求文档_abc123.md
+需求文档_abc123.assets/
+```
 
-只要解析到嵌入/引用的在线文档 token（doc/docx/sheet/base/bitable/mindnote/slides），都必须：
+这里放的是：
 
-* **统一落盘到：** `refer/larkfiles/<that_token>/content.md`
-* 并且该 `content.md` 导出完成后，也要继续按现有逻辑解析其嵌入，触发下一层 refer 下载（直到无新 token）
+* 图片块
+* 附件块
+* 白板导出图 / JSON
+* 其他块级资源
+* 不具备独立云文档语义的 file
 
-示例：
-A（Entry）嵌入 B（docx），B 又嵌入 C（docx）：
+## 命名优先级
 
-* `entry_tree/.../A_<A>.md`
-* `refer/larkfiles/<B>/content.md`
-* `refer/larkfiles/<C>/content.md`
-
-禁止把 C 放到 `refer/larkfiles/<B>/` 下面，也禁止复制嵌入层级结构。
-
----
-
-# 6) assets 的 original.<ext> 扩展名规则（最小改动）
-
-* 若现有下载结果/响应提供文件名（含 ext）→ 取该 ext
-* 否则若提供 mime → 用现有 mime->ext 映射
-* 否则兜底 `.bin`
-  只需保证最终文件名是 `original.<ext>`。
+1. 原始文件名
+2. `{safe_name}_{token_or_block_id}{ext}`
+3. `{host_doc_safe_name}_{resource_type}_{index}{ext}`
 
 ---
 
-# 7) 仅允许改动的代码点
+# 5) A 引 B 的规则
 
-1. Entry Tree 的命名：文件夹/文件统一加 `_token`
-2. refer 的输出路径构造（把原来散落的路径改成本文要求）
-3. Markdown 引用重写若依赖原路径：仅更新为新的 refer 相对路径（不要改内容逻辑）
+## 场景 A：B 在飞书树中
+
+* B 只存主树
+* A 链接主树中的 B
+* B 不进入 `refer/`
+
+## 场景 B：B 不在飞书树中，但 B 是独立云文档对象
+
+* B 落 `refer/`
+* A 链接 `refer/` 中对应真实文件
+
+## 场景 C：A 引用的是资源类内容
+
+* 资源落 `A_xxx.assets/`
+* A 链接自己的 `.assets/` 目录中的真实文件
 
 ---
 
-# 8) 禁止事项（必须遵守）
+# 6) `file` 类型特殊规则
 
-* 不新增导出格式（只 Markdown）
-* 不新增缩略图/转码
-* 不改变哪些 block/link 会触发下载
-* 不改变 token 提取/回退逻辑
-* 不引入新的 refer 子目录结构
+`file` 不按类型一刀切，而按“语义来源”分流：
+
+## 独立对象型 file
+
+* 落 `refer/`
+* 优先原始文件名
+
+## 宿主资源型 file
+
+* 落 `<doc>.assets/`
+* 与图片/附件块同等处理
 
 ---
 
-只完成以上 path 结构修改与归类即可，不要做额外优化或重构。
+# 7) 状态切换规则
+
+会有这种情况：
+
+* 第一次同步时，对象不在主树，因此进入 `refer/`
+* 后续同步时，对象出现在主树
+
+或者反过来。
+
+Obsidian 优先方案接受真实文件迁移：
+
+* `refer/` → 主树：迁移文件、更新引用、删除旧 refer 文件
+* 主树 → `refer/`：迁移文件、更新引用、删除旧主树文件
+
+不引入 stub / view / 占位页作为常态方案。
+
+---
+
+# 8) 禁止事项
+
+* 不为了路径稳定引入大量 stub/view 文件
+* 不继续使用 `content.md` / `content.xlsx` 作为 refer 默认文件名
+* 不继续使用 `original.<ext>` 作为所有资源的统一命名目标
+* 不把飞书树节点和宿主资源混放在同一个语义层级里
+
+---
+
+# 9) 实现关注点
+
+1. 主树路径生成仍由主树同步流程决定
+2. 引用下载时必须先判断：树节点 / refer 对象 / 宿主资源
+3. 链接重写必须直接指向真实文件
+4. Obsidian 中用户看到的尽量都是真文件

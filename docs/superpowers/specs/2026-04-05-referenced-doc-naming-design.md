@@ -1,61 +1,380 @@
-# 引用文档命名优化设计
+# 引用文档与资源落盘结构设计（Obsidian 优先）
 
-## 问题
+## 目标
 
-引用文档（嵌套文档）下载后统一命名为 `content.md`，没有使用文档真实标题，可读性差。
+本次设计目标不是单纯“重命名文件”，而是为 **Obsidian 使用场景** 重新定义引用内容的本地落盘结构。
 
-当前逻辑：
-- 父文档：`{sanitized_title}_{token}.md`（有 token 后缀）
-- 引用文档：`larkfiles/{token}/content.md`（无标题信息）
+目标有四个：
 
-## 方案
+1. **主树尽量保持飞书原有目录结构**；
+2. **本地文件和文件夹对人可读**；
+3. **多篇文档引用同一个云文档时不重复下载**；
+4. **Obsidian 中看到的尽量都是真文件，而不是 view/stub/占位页。**
 
-将引用文档的命名逻辑与父文档对齐，使用 `{sanitized_title}_{token}.{ext}` 格式。
+---
 
-### 命名规则
+## 设计原则
 
-| 文档类型 | 输出文件名 | 示例 |
-|---------|-----------|------|
-| DocX | `{sanitized_title}_{token}.md` | `产品需求文档_abc12345.md` |
-| Sheet/Bitable/Base/sheets | `{sanitized_title}_{token}.xlsx` | `数据表_xyz98765.xlsx` |
-| Slides/Mindnote | `{sanitized_title}_{token}.md` | `演示文稿_abc12345.md` |
-| File (assets) | `original_{token}.{ext}` | `original_abc12345.pdf` |
-| 其他 | `{sanitized_title}_{token}.md` | 同 DocX |
+### 原则 1：飞书树节点优先保留在主树
 
-### 去重逻辑
+凡是本来就属于飞书目录树 / 知识库树遍历结果的节点：
 
-- **Token 唯一性**：`{title}_{token}` 保证同一 token 的文档始终解析到同一路径，不会重复下载
-- **路径注册**：`_register_and_resolve_path()` 保持不变，继续处理同名不同 token 的冲突
+- 飞书文件夹 → 本地目录
+- 飞书文档 / 表格 / 其他云文档 → 本地文件
 
-### 向后兼容
+它们应尽量保持飞书树的层级语义，而不是被包进“每个文档一个目录”的结构里。
 
-- `_resolve_reference_output()` 在查找文件时，优先查找新命名（`{title}_{token}.{ext}`），若找不到则 fallback 到旧命名（`content.md` / `content.xlsx`），避免已下载文档失效或重复下载
+### 原则 2：云文档类引用统一 flat 到 `refer/`
 
-### 代码修改
+凡是**不属于当前主树节点**、但可被视为“独立云对象”的引用内容，统一平铺落到顶层 `refer/`：
 
-**修改位置：** `larksync/core/downloaders/docx_downloader.py`
+- doc / docx
+- sheet / sheets
+- bitable / base
+- slides
+- mindnote
+- 语义上属于“独立文档对象”的 file 链接
 
-1. `_reference_output_filename()` (line 905-910)：
-   - 当前返回固定 `content.md` / `content.xlsx`
-   - 改为接收 `safe_name` 和 `token`，返回 `{safe_name}_{token}.{ext}`
+这些对象：
 
-2. 调用处 (line 796-806)：
-   - 传入 `safe_name` 和 `token` 给 `_reference_output_filename()`
+- 可以被多个文档复用；
+- 通常有稳定 token；
+- 适合一份落盘、多处链接。
 
-3. `_resolve_reference_output()` (line 949-975)：
-   - 回退逻辑中的 `content.md` 改为使用相同命名规则
+### 原则 3：资源类内容跟宿主文档走
 
-### 行为变化
+凡是“文档附属资源”而非“独立云文档对象”的内容，放到宿主文档同层的 sidecar 目录：
 
-- **Before**: `larkfiles/abc12345/content.md`
-- **After**: `larkfiles/abc12345/产品需求文档_abc12345.md`
+- 图片
+- 附件块
+- 白板导出图 / JSON
+- 其他块级资源文件
 
-- **Before**: `assets/abc12345/original.pdf`
-- **After**: `assets/abc12345/original_abc12345.pdf`
+推荐 sidecar 目录命名：
 
-### 测试要点
+```text
+<doc_filename>.assets/
+```
 
-1. 引用文档命名包含真实标题
-2. 同 token 引用多次不重复下载（路径一致）
-3. 不同文档同名时通过 token 区分（不冲突）
-4. `file` 类型引用保持 `original.*` 命名
+例如：
+
+```text
+需求文档_abc123.md
+需求文档_abc123.assets/
+```
+
+这样在 Obsidian 中：
+
+- 主文档是正常 Markdown 文件；
+- 资源目录自然挂在文档旁边；
+- 不会把飞书文件和飞书文件夹混在一起。
+
+### 原则 4：不要引入 view/stub 作为常态
+
+Obsidian 更适合直接面对真实文件。
+
+因此本方案不推荐：
+
+- “canonical store + 主树 stub 文件”的双层展示方案；
+- 让用户在 Vault 里看到大量跳转页、占位页、视图页。
+
+本设计优先保证：
+
+- 链接尽量直接指向真实 `.md/.xlsx/.pdf/.png` 文件；
+- 用户在 Obsidian 搜索、图谱、双链里看到的是实体文件。
+
+---
+
+## 最终结构
+
+### 1. 主树：保持飞书结构
+
+```text
+Vault/
+  项目资料/
+    A_aaa111.md
+    B_bbb222.md
+    子目录/
+      C_ccc333.md
+```
+
+说明：
+
+- 这里的文件/目录都代表飞书树中的正式节点；
+- 文件名使用 `{sanitized_title}_{token}.{ext}`；
+- 文件夹名按现有树结构落盘，可保留 `_token` 后缀策略。
+
+### 2. 全局 `refer/`：flat 放独立云文档引用
+
+```text
+Vault/
+  refer/
+    会议纪要_def456.md
+    数据表_xyz789.xlsx
+    脑图_mno555.md
+```
+
+说明：
+
+- `refer/` 只放“独立云文档对象”；
+- 默认平铺，不再细分多级目录；
+- 用 `safe_name + token` 解决重名问题；
+- 同 token 多次引用时只落一份。
+
+### 3. sidecar assets：跟宿主文档同层
+
+```text
+Vault/
+  项目资料/
+    A_aaa111.md
+    A_aaa111.assets/
+      架构图_img001.png
+      合同附件_file123.pdf
+      白板_blk888.png
+```
+
+说明：
+
+- 这些资源默认不是共享知识节点，而是宿主文档的附属内容；
+- 直接跟文档走，更符合 Obsidian 使用习惯；
+- 如果两个文档各自引用了同一张图片/附件，可以接受各自保留一份本地副本。
+
+---
+
+## 分流规则
+
+这是本设计最重要的部分。
+
+### A. 如果对象属于飞书树节点
+
+例如：
+
+- B 本来就在当前同步的目录树中；
+- A 又在正文里引用了 B。
+
+则规则是：
+
+- **B 只落在主树**；
+- A 中的引用改写为指向主树里的 B；
+- **B 不再进入 `refer/`**。
+
+也就是说：
+
+> 树节点优先于 refer。
+
+### B. 如果对象不属于飞书树节点，但属于独立云文档对象
+
+例如：
+
+- A 引用了一个当前不在同步树内的 docx；
+- A 引用了一个独立的 sheet/base/slides/mindnote。
+
+则规则是：
+
+- 落到 `refer/`；
+- 命名为 `{safe_name}_{token}.{ext}`；
+- 多处引用命中同一份本地文件。
+
+### C. 如果对象属于宿主文档资源
+
+例如：
+
+- 图片块
+- 附件块
+- 白板导出图 / JSON
+- 没有独立知识语义的资源文件
+
+则规则是：
+
+- 落到宿主文档 `.assets/` 目录；
+- 不进入全局 `refer/`。
+
+---
+
+## `file` 类型的特殊处理
+
+`file` 不能只按类型硬编码，必须按**语义来源**分流。
+
+### 进入 `refer/` 的 file
+
+当 file 是“一个独立云对象链接”时，例如：
+
+- A 文档正文里引用了一个飞书 file 链接；
+- 这个 file 更像“独立附件对象”，可能被多个文档引用。
+
+此时它应进入 `refer/`。
+
+推荐命名：
+
+- 优先保留原始文件名；
+- 若原始文件名冲突或不可得，则使用 `{safe_name}_{token}{ext}`。
+
+### 进入 `.assets/` 的 file
+
+当 file 是宿主文档的附件块 / 内嵌资源时：
+
+- 跟宿主文档走；
+- 落到 `<doc>.assets/`；
+- 不进入 `refer/`。
+
+一句话：
+
+> `file` 按“独立对象”还是“宿主资源”分流，而不是按 file 类型一刀切。
+
+---
+
+## 命名规则
+
+### 主树文件
+
+```text
+{sanitized_title}_{token}.md
+{sanitized_title}_{token}.xlsx
+```
+
+### `refer/` 中文档类对象
+
+```text
+{sanitized_title}_{token}.md
+{sanitized_title}_{token}.xlsx
+```
+
+### `.assets/` 中资源类对象
+
+优先级如下：
+
+1. 有明确原始文件名 → 保留原始文件名
+2. 否则有 token / block_id → `{sanitized_title}_{stable_id}{ext}`
+3. 否则 → `{host_doc_safe_name}_{resource_type}_{index}{ext}`
+
+其中 `stable_id` 优先级：
+
+1. token
+2. block_id
+3. `parent_token + index`
+
+例如：
+
+```text
+架构图_img001.png
+流程图_blk_a1b2c3.png
+需求文档_abc123_attachment_01.bin
+```
+
+---
+
+## A 引 B 的规则
+
+这是本设计的核心判定：
+
+### 场景 1：A、B 都在飞书树里
+
+则：
+
+- B 存主树；
+- A 链接主树里的 B；
+- B 不进入 `refer/`。
+
+### 场景 2：A 在树里，B 不在树里，但 B 是独立云文档
+
+则：
+
+- B 落 `refer/`；
+- A 链接 `refer/B_xxx.md`。
+
+### 场景 3：A 在树里，引用的是图片/附件/白板等宿主资源
+
+则：
+
+- 资源落 `A_aaa111.assets/`；
+- A 链接自己的 `.assets/` 中对应资源。
+
+---
+
+## 关于“状态变化”的处理
+
+会存在这种情况：
+
+- 第一次同步时，B 不在树里，因此进入 `refer/`
+- 第二次同步时，B 出现在树里
+
+或者反过来。
+
+本设计在 Obsidian 优先的前提下，接受“真实文件迁移”的代价。
+
+### 当对象从 `refer/` 变成树节点
+
+- 将对象迁移到主树；
+- 更新引用链接；
+- `refer/` 中旧文件删除。
+
+### 当对象从树节点变成仅引用对象
+
+- 将对象迁移到 `refer/`；
+- 更新引用链接；
+- 主树中的旧文件删除。
+
+这是 Obsidian 友好方案必须接受的取舍：
+
+- 不引入 stub/view；
+- 但允许 canonical 路径在“树节点 / refer”之间迁移。
+
+---
+
+## 为什么 `refer/` 默认 flat
+
+因为：
+
+1. 云文档类对象大多有 token，可唯一命名；
+2. 在 Obsidian 里，多层 `refer/docs/.../sheet/...` 比 flat 更难浏览；
+3. `refer/` 的本质是“树外但可独立打开的对象池”，不是另一棵结构树。
+
+因此默认：
+
+```text
+refer/
+  xxx.md
+  yyy.xlsx
+  zzz.pdf
+```
+
+只有当 `refer/` 规模过大时，才考虑升级成一层轻量分桶，例如：
+
+```text
+refer/
+  docs/
+  files/
+  media/
+```
+
+但不建议再往下做深层目录。
+
+---
+
+## 风险与取舍
+
+### 优点
+
+- Obsidian 中看到的基本都是真文件；
+- 主树尽量贴近飞书；
+- 树外独立对象有统一 `refer/`；
+- 资源类内容跟宿主文档走，更自然；
+- 多文档引用同一云文档时可复用同一份 refer 文件。
+
+### 代价
+
+- 某些对象在“树节点”与“仅引用对象”之间切换时，需要迁移路径；
+- `file` 类型需要按语义来源而不是按类型硬分；
+- 需要明确哪些对象属于主树，哪些属于 refer，哪些属于 assets。
+
+---
+
+## 验收标准
+
+1. 飞书树节点继续按主树结构落盘；
+2. 独立云文档引用统一进入 flat `refer/`；
+3. 宿主文档资源统一进入 `<doc>.assets/`；
+4. A 引 B 且 B 在树中时，B 不进入 `refer/`；
+5. A 引树外独立云文档时，目标进入 `refer/`；
+6. `file` 类型能按“独立对象 / 宿主资源”正确分流；
+7. Obsidian 中用户看到的是可直接打开和链接的真实文件。
