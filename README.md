@@ -375,9 +375,57 @@ pytest
 
 仓库提供 `Dockerfile`，构建包含 FastAPI 后端与 Next.js 前端的镜像（单端口架构）。
 
-### Docker 部署步骤（推荐）
+### 容器路径与端口
 
-1) 准备目录结构（宿主机）
+- **端口 `8000`**：Web 服务监听端口（容器内 `0.0.0.0:8000`），需映射到宿主机
+- **`/data`**：配置持久化目录，建议挂载宿主机目录用于存储 `config.toml`、Web 数据库等
+- **`/download`**：下载目录，CLI 下载内容在 `/download/cli`，Web 用户数据在 `/download/web`
+
+### 最小必要配置
+
+使用环境变量部署时，至少需要配置以下变量：
+
+| 环境变量 | 说明 | 示例 |
+|---------|------|------|
+| `LARKSYNC__WEB__OAUTH__APP_ID` | 飞书应用 App ID | `cli_abc123xxx` |
+| `LARKSYNC__WEB__OAUTH__APP_SECRET` | 飞书应用 App Secret | `xxx` |
+| `LARKSYNC__WEB__OAUTH__CALLBACK_URL` | OAuth 回调地址 | `http://your-domain.com/api/auth/callback` |
+| `LARKSYNC__WEB__ALLOW_DOWNLOAD_USER_IDS` | 允许使用系统的用户白名单（`*` 表示全部允许） | `*` |
+| `LARKSYNC__WEB__ALLOW_DOWNLOAD_WIKI_USER_IDS` | 允许配置知识库同步的用户白名单（`*` 表示全部允许） | `*` |
+
+### 快速开始示例（环境变量方式）
+
+以下命令可直接运行，无需配置文件。先准备好宿主机目录后执行：
+
+```bash
+docker run -d \
+  -p 8000:8000 \
+  -v /data:/data \
+  -v /download:/download \
+  -e LARKSYNC__WEB__OAUTH__APP_ID=your_app_id \
+  -e LARKSYNC__WEB__OAUTH__APP_SECRET=your_app_secret \
+  -e LARKSYNC__WEB__OAUTH__CALLBACK_URL=http://localhost:8000/api/auth/callback \
+  -e LARKSYNC__WEB__ALLOW_DOWNLOAD_USER_IDS=* \
+  -e LARKSYNC__WEB__ALLOW_DOWNLOAD_WIKI_USER_IDS=* \
+  --name larksync \
+  larksync:latest
+```
+
+启动后访问 `http://localhost:8000` 即可使用。
+
+### 其他可选配置
+
+| 环境变量 | 说明 | 默认值 |
+|---------|------|--------|
+| `LARKSYNC__WEB__DATABASE_URL` | Web 系统数据库连接 | `sqlite:////data/web/larksync.db` |
+| `LARKSYNC__WEB__USER_STORAGE_BASE` | Web 用户数据目录 | `/download/web` |
+| `LARKSYNC__STORAGE__DOWNLOAD_ROOT` | 下载根目录（CLI 用 `{root}/cli`，Web 用 `{root}/web`） | `/download` |
+| `LARKSYNC__WEB__SCHEDULER__FORCE_QUEUE` | 是否强制排队执行 | `true` |
+
+### 使用配置文件方式
+
+先准备宿主机目录结构：
+
 ```
 /data/
 ├── config/
@@ -392,21 +440,14 @@ pytest
 ├── cli/                   # CLI 下载目录（默认）
 └── web/                   # Web 用户数据目录（默认）
 
-2) 复制并修改配置
+复制并修改配置：
+
 ```bash
 cp config.docker.toml /data/config/config.toml
 ```
-按需调整：
-- `[web].database_url = "sqlite:////data/web/larksync.db"`
-- `[web].user_storage_base = "/data/web/users"`
-- `[storage].download_root`（建议显式设置）
 
-3) 构建镜像
-```bash
-docker build -t larksync:latest .
-```
+按需调整 `config.toml` 中的参数后，运行容器：
 
-4) 启动容器（端口映射必选）
 ```bash
 docker run -d \
   -p 8000:8000 \
@@ -421,56 +462,6 @@ docker run -d \
 - 启动 FastAPI（监听 `0.0.0.0:8000`）
 - FastAPI 直接服务前端静态文件（单端口架构）
 - 运行数据存放在 `/data` 与 `/download` 挂载目录
-
-### Docker 环境变量
-
-必要：
-- 端口映射必选（例如 `-p 8000:8000`）。
-- 容器内 `/data` 与 `/download` 必须挂载到宿主机（持久化配置与数据）。
-- 必须配置用户白名单：
-  - `LARKSYNC__WEB__ALLOW_DOWNLOAD_USER_IDS`（`*` 表示全部允许）
-
-默认值（若未配置上述变量）：
-- `storage.download_root` 默认 `/download`，CLI 下载路径为 `/download/cli`
-- `web.user_storage_base` 默认 `/download/web`
-
-如不提供 `config.toml`，Docker 部署需至少提供以下环境变量：
-- `LARKSYNC__WEB__ENABLED=true`（默认已启用，可不设置）
-- `LARKSYNC__WEB__OAUTH__APP_ID`
-- `LARKSYNC__WEB__OAUTH__APP_SECRET`
-- `LARKSYNC__WEB__OAUTH__CALLBACK_URL`
-- `LARKSYNC__WEB__DATABASE_URL`
-- `LARKSYNC__WEB__USER_STORAGE_BASE`（可选，默认 `/download/web`）
-- `LARKSYNC__WEB__ALLOW_DOWNLOAD_USER_IDS`
-
-建议同时设置：
-- `LARKSYNC__STORAGE__DOWNLOAD_ROOT`（会自动派生 `download_root/cli` 与 `download_root/web`，默认 `/download`）
-
-推荐（使用 `/data` 挂载时）：
-- `LARKSYNC_CONFIG`：指定配置文件路径（例如 `/data/config/config.toml`）。
-
-可选：
-- `BACKEND_HOST` / `BACKEND_PORT`：控制 FastAPI 监听地址与端口（默认 `0.0.0.0:8000`，变更后需同步调整端口映射）。
-- `LARKSYNC__STORAGE__DOWNLOAD_ROOT`：统一控制 CLI/Web 下载目录（CLI 用 `{root}/cli`，Web 用 `{root}/web`）。
-- `LARKSYNC__WEB__USER_STORAGE_BASE`：覆盖 Web 用户数据目录（优先级高于 `download_root`）。
-- `LARKSYNC__WEB__ALLOW_DOWNLOAD_USER_IDS`：允许使用系统的用户白名单（逗号分隔；`*` 表示全部允许）。
-- `LARKSYNC__WEB__ALLOW_DOWNLOAD_WIKI_USER_IDS`：允许配置知识库同步的用户白名单（逗号分隔）。
-- `LARKSYNC__WEB__DATABASE_URL`：覆盖 Web 数据库连接串。
-- `LARKSYNC__WEB__SCHEDULER__FORCE_QUEUE`：是否强制排队执行（`true/false`）。
-
-示例：
-```bash
-docker run -d \
-  -p 8000:8000 \
-  -v /data:/data \
-  -e LARKSYNC_CONFIG=/data/config/config.toml \
-  -e LARKSYNC__WEB__DATABASE_URL=sqlite:////data/web/larksync.db \
-  -e LARKSYNC__WEB__USER_STORAGE_BASE=/data/web/users \
-  -e LARKSYNC__STORAGE__DOWNLOAD_ROOT=/data \
-  -e LARKSYNC__WEB__SCHEDULER__FORCE_QUEUE=true \
-  --name larksync \
-  larksync:latest
-```
 
 ## 打包发布
 
