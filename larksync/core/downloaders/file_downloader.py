@@ -10,7 +10,7 @@ from urllib.parse import unquote
 import httpx
 
 from ...utils.filesystem import sanitize_filename
-from ..reference_cache import register_resolved_path
+from ..reference_cache import lookup_resolved_path, register_resolved_path
 from ..api_client import FeishuAPIError
 from ..models import SyncTask
 from .base_downloader import BaseDownloader
@@ -34,9 +34,8 @@ class FileDownloader(BaseDownloader):
 
         assert response is not None
         try:
-            # 优先使用指定的输出文件名（可能带 token 后缀以避免同名文件冲突）
             if isinstance(task.extra, dict) and task.extra.get("force_original_name"):
-                filename = self._resolve_original_filename(response)
+                filename = self._resolve_reference_filename(response, task)
             elif task.output_filename:
                 filename = task.output_filename
             else:
@@ -44,6 +43,7 @@ class FileDownloader(BaseDownloader):
             relative = task.parent_path / sanitize_filename(filename)
             path = self.storage.target_path(relative)
             self.storage.write_stream(path, response.iter_bytes())
+            self._cleanup_stale_refer_copy(task.token, path)
             register_resolved_path(task.token, path)
         finally:
             response.close()
@@ -55,14 +55,31 @@ class FileDownloader(BaseDownloader):
             filename = fallback
         return filename
 
-    def _resolve_original_filename(self, response: httpx.Response) -> str:
+    def _resolve_reference_filename(self, response: httpx.Response, task: SyncTask) -> str:
         filename = self._resolve_filename(response, "")
+        if filename:
+            return filename
+
+        base_name = sanitize_filename(task.name) or task.token or "file"
+        stem = Path(base_name).stem or task.token or "file"
+        token_suffix = f"_{task.token}" if task.token and not stem.endswith(f"_{task.token}") else ""
         suffix = Path(filename).suffix
         if not suffix:
             mime_type = response.headers.get("Content-Type") or ""
             ext = mimetypes.guess_extension(mime_type.split(";")[0].strip()) if mime_type else None
             suffix = ext or ".bin"
-        return f"original{suffix}"
+        return f"{stem}{token_suffix}{suffix}"
+
+    def _cleanup_stale_refer_copy(self, token: str, canonical_path: Path) -> None:
+        existing = lookup_resolved_path(token)
+        if existing is None or existing == canonical_path or not existing.exists():
+            return
+        try:
+            existing.relative_to(self.storage.root / "refer")
+        except ValueError:
+            return
+        if existing.is_file():
+            existing.unlink(missing_ok=True)
 
     @staticmethod
     def _parse_content_disposition(value: str) -> str | None:

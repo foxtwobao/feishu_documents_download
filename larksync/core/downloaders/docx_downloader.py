@@ -72,7 +72,6 @@ class DocxDownloader(BaseDownloader):
 
         output_name = self._resolve_output_name(task, doc_meta)
         relative_base = task.parent_path / output_name
-        assets_root, larkfiles_root = self._refer_roots(task)
 
         history: Set[str] = set()
         depth = 0
@@ -91,24 +90,26 @@ class DocxDownloader(BaseDownloader):
         # Markdown 文件路径（用于计算相对路径）
         # 使用 safe_add_suffix 避免 .with_suffix() 把 '产品2.0' 变成 '产品2.md'
         markdown_path = self.storage.target_path(safe_add_suffix(relative_base, ".md"))
+        assets_root = self._host_assets_root(markdown_path)
+        refer_root = self._refer_root(task)
 
         markdown = self._finalize_markdown(
             task,
             doc_meta,
             parse_result,
             assets_root,
-            larkfiles_root,
+            refer_root,
             markdown_path,
         )
 
         self.storage.write_text(markdown_path, markdown)
+        self._cleanup_stale_refer_copy(task.token, markdown_path)
         register_resolved_path(task.token, markdown_path)
 
         references = self._extract_references(parse_result)
         referenced = self._download_referenced_docx(
             references,
-            assets_root,
-            larkfiles_root,
+            refer_root,
             depth,
             history,
             task,
@@ -129,7 +130,7 @@ class DocxDownloader(BaseDownloader):
             return sanitize_filename(title)
         return task.target_path.name
 
-    def _refer_roots(self, task: SyncTask) -> tuple[Path, Path]:
+    def _refer_root(self, task: SyncTask) -> Path:
         refer_base = None
         if isinstance(task.extra, dict):
             refer_base = task.extra.get("entry_root")
@@ -139,11 +140,13 @@ class DocxDownloader(BaseDownloader):
             refer_root = self.storage.root / Path(refer_base) / "refer"
         else:
             refer_root = self.storage.root / "refer"
-        assets_root = refer_root / "assets"
-        larkfiles_root = refer_root / "larkfiles"
+        refer_root.mkdir(parents=True, exist_ok=True)
+        return refer_root
+
+    def _host_assets_root(self, markdown_path: Path) -> Path:
+        assets_root = markdown_path.parent / f"{markdown_path.stem}.assets"
         assets_root.mkdir(parents=True, exist_ok=True)
-        larkfiles_root.mkdir(parents=True, exist_ok=True)
-        return assets_root, larkfiles_root
+        return assets_root
 
     def _finalize_markdown(
         self,
@@ -151,14 +154,14 @@ class DocxDownloader(BaseDownloader):
         doc_meta: Mapping[str, object],
         parse_result: DocxParseResult,
         assets_root: Path,
-        larkfiles_root: Path,
+        refer_root: Path,
         markdown_path: Path,
     ) -> str:
         placeholder_map: Dict[str, str] = {}
         placeholder_map.update(self._materialize_images(parse_result.images, assets_root, markdown_path))
         placeholder_map.update(self._materialize_attachments(parse_result.attachments, assets_root, markdown_path))
         placeholder_map.update(self._materialize_whiteboards(parse_result.whiteboards, assets_root, markdown_path))
-        placeholder_map.update(self._materialize_sheets(parse_result.sheets, larkfiles_root))
+        placeholder_map.update(self._materialize_sheets(parse_result.sheets, assets_root))
         placeholder_map.update(self._materialize_wiki_catalogs(task, parse_result.wiki_catalogs, markdown_path))
 
         markdown = parse_result.markdown
@@ -174,7 +177,7 @@ class DocxDownloader(BaseDownloader):
             )
         return markdown
 
-    def _materialize_sheets(self, sheets: Iterable[SheetExport], larkfiles_root: Path) -> Dict[str, str]:
+    def _materialize_sheets(self, sheets: Iterable[SheetExport], assets_root: Path) -> Dict[str, str]:
         resources = list(sheets)
         if not resources:
             return {}
@@ -184,8 +187,8 @@ class DocxDownloader(BaseDownloader):
                 csv_content = self._export_sheet_csv(sheet)
                 table = self._csv_to_markdown(csv_content)
                 substitutions[sheet.placeholder] = table
-                target_dir = larkfiles_root / sheet.spreadsheet_token
-                target_path = target_dir / "content.md"
+                safe_name = sanitize_filename(sheet.name) or sheet.spreadsheet_token
+                target_path = assets_root / f"{safe_name}_{sheet.spreadsheet_token}.md"
                 self.storage.write_text(target_path, f"{table}\n")
             except FeishuAPIError as exc:
                 self._logger.warning(
@@ -201,8 +204,8 @@ class DocxDownloader(BaseDownloader):
                 note = f"API {exc.status_code}: {exc.message}"
                 note_text = f"<!-- Sheet export failed: {note} -->"
                 substitutions[sheet.placeholder] = note_text
-                target_dir = larkfiles_root / sheet.spreadsheet_token
-                target_path = target_dir / "content.md"
+                safe_name = sanitize_filename(sheet.name) or sheet.spreadsheet_token
+                target_path = assets_root / f"{safe_name}_{sheet.spreadsheet_token}.md"
                 self.storage.write_text(target_path, f"{note_text}\n")
             except Exception as exc:  # pragma: no cover - defensive
                 self._logger.warning(
@@ -216,8 +219,8 @@ class DocxDownloader(BaseDownloader):
                 )
                 note_text = f"<!-- Sheet export failed: {exc} -->"
                 substitutions[sheet.placeholder] = note_text
-                target_dir = larkfiles_root / sheet.spreadsheet_token
-                target_path = target_dir / "content.md"
+                safe_name = sanitize_filename(sheet.name) or sheet.spreadsheet_token
+                target_path = assets_root / f"{safe_name}_{sheet.spreadsheet_token}.md"
                 self.storage.write_text(target_path, f"{note_text}\n")
         return substitutions
 
@@ -494,14 +497,17 @@ class DocxDownloader(BaseDownloader):
                 return (resource.placeholder, self._image_error_placeholder(resource, exc))
             
             try:
-                assets_dir = assets_root / resource.token
-                assets_dir.mkdir(parents=True, exist_ok=True)
                 suffix = self._resolve_original_extension(
                     resource,
                     response,
                     fallback_ext=".png",
                 )
-                path = assets_dir / f"original{suffix}"
+                path = self._asset_path_for_resource(
+                    assets_root,
+                    resource.name,
+                    resource.token or resource.block_id,
+                    suffix,
+                )
                 self.storage.write_stream(path, response.iter_bytes())
                 return (resource.placeholder, self._image_markdown(resource, path, markdown_path))
             finally:
@@ -572,14 +578,14 @@ class DocxDownloader(BaseDownloader):
                     return (resource.placeholder, self._attachment_error_placeholder(resource, fallback_exc or exc))
             
             try:
-                assets_dir = assets_root / resource.token
-                assets_dir.mkdir(parents=True, exist_ok=True)
-                suffix = self._resolve_original_extension(
-                    resource,
+                filename = self._resolve_resource_filename(resource, response, fallback=resource.name or "attachment")
+                path = self._asset_path_for_attachment(
+                    assets_root,
+                    filename,
+                    resource.name,
+                    resource.token or resource.block_id,
                     response,
-                    fallback_ext=".bin",
                 )
-                path = assets_dir / f"original{suffix}"
                 self.storage.write_stream(path, response.iter_bytes())
                 return (resource.placeholder, self._attachment_markdown(resource, path, markdown_path))
             finally:
@@ -614,9 +620,7 @@ class DocxDownloader(BaseDownloader):
         substitutions: Dict[str, str] = {}
         for resource in resources:
             whiteboard_token = resource.whiteboard_id or resource.block_id or "whiteboard"
-            assets_dir = assets_root / whiteboard_token
-            assets_dir.mkdir(parents=True, exist_ok=True)
-            json_path = assets_dir / "original.json"
+            json_path = self._asset_path_for_resource(assets_root, resource.name, whiteboard_token, ".json")
 
             image_replacement = ""
             json_replacement = ""
@@ -627,7 +631,7 @@ class DocxDownloader(BaseDownloader):
                 )
                 try:
                     suffix = self._resolve_whiteboard_image_extension(response)
-                    image_path = assets_dir / f"original{suffix}"
+                    image_path = self._asset_path_for_resource(assets_root, resource.name, whiteboard_token, suffix)
                     self.storage.write_stream(image_path, response.iter_bytes())
                     image_replacement = self._whiteboard_image_markdown(resource, image_path, markdown_path)
                 finally:
@@ -698,8 +702,7 @@ class DocxDownloader(BaseDownloader):
     def _download_referenced_docx(
         self,
         references: List[Tuple[str, str, Optional[str]]],
-        assets_root: Path,
-        larkfiles_root: Path,
+        refer_root: Path,
         current_depth: int,
         history: Set[str],
         task: SyncTask,
@@ -779,8 +782,6 @@ class DocxDownloader(BaseDownloader):
                 known_paths[token] = markdown_path
                 continue
 
-            target_dir = self._resolve_reference_dir(ref_type, token, assets_root, larkfiles_root)
-
             display_name = self._resolve_reference_name(meta_map, ref_type, token)
             safe_name = sanitize_filename(display_name) or token
 
@@ -793,7 +794,7 @@ class DocxDownloader(BaseDownloader):
             if isinstance(task.extra, dict) and task.extra.get("entry_root"):
                 extra["entry_root"] = task.extra.get("entry_root")
 
-            output_filename = self._reference_output_filename(ref_type)
+            output_filename = self._reference_output_filename(ref_type, safe_name, token)
             if ref_type == "file":
                 extra["force_original_name"] = True
 
@@ -801,7 +802,7 @@ class DocxDownloader(BaseDownloader):
                 token=token,
                 file_type=ref_type,
                 name=safe_name,
-                parent_path=target_dir.relative_to(self.storage.root),
+                parent_path=refer_root.relative_to(self.storage.root),
                 extra=extra,
                 output_filename=output_filename,
             )
@@ -811,23 +812,10 @@ class DocxDownloader(BaseDownloader):
                 downloader.execute(subtask)
                 path = lookup_resolved_path(token)
                 if path is None or not path.exists():
-                    path = self._resolve_reference_output(ref_type, token, safe_name, target_dir)
-                if ref_type in {"sheet", "sheets", "bitable", "base"}:
-                    content_md = target_dir / "content.md"
-                    xlsx_name = path.name if path else "content.xlsx"
-                    link_label = display_name or token
-                    content = "\n".join(
-                        [
-                            f"# {link_label}",
-                            "",
-                            f"[下载表格]({xlsx_name})",
-                            "",
-                        ]
-                    )
-                    self.storage.write_text(content_md, content)
-                    path = content_md
+                    path = self._resolve_reference_output(ref_type, token, safe_name, refer_root)
                 if path is None:
-                    path = target_dir / f"{safe_name}.md"
+                    fallback_name = output_filename or f"{safe_name}_{token}.md"
+                    path = refer_root / fallback_name
                 register_resolved_path(token, path)
                 results.append(
                     ReferencedDownload(
@@ -865,7 +853,7 @@ class DocxDownloader(BaseDownloader):
                 note = str(exc)
 
             placeholder_name = sanitize_filename(display_name) or sanitize_filename(token) or "refer_doc"
-            placeholder = target_dir / f"{placeholder_name}.md"
+            placeholder = refer_root / f"{placeholder_name}_{token}.md"
             lines = [
                 f"# {display_name}",
                 "",
@@ -887,27 +875,13 @@ class DocxDownloader(BaseDownloader):
             known_paths[token] = placeholder
         return results
 
-    def _resolve_reference_dir(
-        self,
-        ref_type: str,
-        token: str,
-        assets_root: Path,
-        larkfiles_root: Path,
-    ) -> Path:
-        if ref_type == "file":
-            target = assets_root / token
-        else:
-            target = larkfiles_root / token
-        target.mkdir(parents=True, exist_ok=True)
-        return target
-
     @staticmethod
-    def _reference_output_filename(ref_type: str) -> Optional[str]:
+    def _reference_output_filename(ref_type: str, safe_name: str, token: str) -> Optional[str]:
         if ref_type == "file":
             return None
         if ref_type in {"sheet", "sheets", "bitable", "base"}:
-            return "content.xlsx"
-        return "content.md"
+            return f"{safe_name}_{token}.xlsx"
+        return f"{safe_name}_{token}.md"
 
     def _load_known_paths(self, task: SyncTask) -> Dict[str, Path]:
         known: Dict[str, Path] = {}
@@ -951,25 +925,23 @@ class DocxDownloader(BaseDownloader):
         ref_type: str,
         token: str,
         safe_name: str,
-        target_dir: Path,
+        refer_root: Path,
     ) -> Optional[Path]:
-        if ref_type == "file":
-            candidates = sorted(target_dir.glob("original.*"))
-        elif ref_type in {"sheet", "sheets", "bitable", "base"}:
-            candidates = [target_dir / "content.md", target_dir / "content.xlsx"]
-        elif ref_type in {"docx", "slides", "mindnote"}:
-            candidates = [target_dir / "content.md"]
+        candidates: List[Path] = []
+        if ref_type in {"sheet", "sheets", "bitable", "base"}:
+            candidates.append(refer_root / f"{safe_name}_{token}.xlsx")
+        elif ref_type == "file":
+            candidates.extend(sorted(path for path in refer_root.iterdir() if path.is_file()))
         else:
-            candidates = [target_dir / "content.md"]
+            candidates.append(refer_root / f"{safe_name}_{token}.md")
 
         for candidate in candidates:
             if candidate.exists():
                 return candidate
 
-        # Fallback: pick the most recently modified file within the directory.
         newest: Optional[Path] = None
         try:
-            for entry in target_dir.iterdir():
+            for entry in refer_root.iterdir():
                 if newest is None:
                     newest = entry
                     continue
@@ -985,10 +957,6 @@ class DocxDownloader(BaseDownloader):
             return None
         if newest.is_file():
             return newest
-        if newest.is_dir():
-            markdown = newest / f"{newest.name}.md"
-            if markdown.exists():
-                return markdown
         return None
 
     def _replace_reference_links(self, markdown_path: Path, downloads: Iterable[ReferencedDownload]) -> None:
@@ -1119,6 +1087,43 @@ class DocxDownloader(BaseDownloader):
             candidate = directory / f"{base}_{counter}{suffix}"
             counter += 1
         return candidate
+
+    def _asset_path_for_resource(self, assets_root: Path, name: str, stable_id: str, suffix: str) -> Path:
+        assets_root.mkdir(parents=True, exist_ok=True)
+        base = sanitize_filename(name) or stable_id or "resource"
+        stem = Path(base).stem or stable_id or "resource"
+        resolved_suffix = suffix if suffix.startswith(".") else f".{suffix}"
+        filename = f"{stem}_{stable_id}{resolved_suffix}" if stable_id and not stem.endswith(f"_{stable_id}") else f"{stem}{resolved_suffix}"
+        return self._unique_path(assets_root, filename)
+
+    def _asset_path_for_attachment(
+        self,
+        assets_root: Path,
+        filename: str,
+        display_name: str,
+        stable_id: str,
+        response: httpx.Response,
+    ) -> Path:
+        assets_root.mkdir(parents=True, exist_ok=True)
+        candidate = sanitize_filename(filename)
+        if candidate and Path(candidate).suffix:
+            return self._unique_path(assets_root, candidate)
+
+        mime_type = response.headers.get("Content-Type") or ""
+        ext = mimetypes.guess_extension(mime_type.split(";")[0].strip()) if mime_type else None
+        fallback_ext = ext or Path(candidate).suffix or ".bin"
+        return self._asset_path_for_resource(assets_root, display_name or filename, stable_id, fallback_ext)
+
+    def _cleanup_stale_refer_copy(self, token: str, canonical_path: Path) -> None:
+        existing = lookup_resolved_path(token)
+        if existing is None or existing == canonical_path or not existing.exists():
+            return
+        try:
+            existing.relative_to(self.storage.root / "refer")
+        except ValueError:
+            return
+        if existing.is_file():
+            existing.unlink(missing_ok=True)
 
     def _image_markdown(self, resource: DocxResource, path: Path, markdown_path: Path) -> str:
         # 计算相对于 markdown 文件的相对路径
