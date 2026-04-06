@@ -13,8 +13,13 @@ from larksync.core.registry import DownloaderRegistry
 from larksync.storage.manager import StorageManager
 
 
-def _build_downloader(tmp_path: Path, *, client: FeishuAPIClient | None = None) -> DocxDownloader:
-    config = LarkSyncConfig()
+def _build_downloader(
+    tmp_path: Path,
+    *,
+    client: FeishuAPIClient | None = None,
+    config: LarkSyncConfig | None = None,
+) -> DocxDownloader:
+    config = config or LarkSyncConfig()
     storage = StorageManager(StorageSettings(root=tmp_path))
     dummy_drive = type(
         "DummyDrive",
@@ -204,7 +209,7 @@ def test_materialize_whiteboards_downloads_assets_to_sidecar(tmp_path: Path):
 
     markdown_path = downloader.storage.target_path(Path("Boards/Boards_abc123.md"))
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
-    assets_root = tmp_path / "Boards" / "Boards_abc123.assets"
+    assets_root = tmp_path / "Boards" / "_Boards_abc123.assets"
     resource = WhiteboardExport(
         whiteboard_id="TFjowjZXghkRAkbUFnrcRlysncd",
         block_id="blk_flow",
@@ -220,8 +225,8 @@ def test_materialize_whiteboards_downloads_assets_to_sidecar(tmp_path: Path):
 
     image_markdown = substitutions["{{whiteboard_image:blk_flow}}"]
     json_markdown = substitutions["{{whiteboard_json:blk_flow}}"]
-    assert "Boards_abc123.assets/流程图_TFjowjZXghkRAkbUFnrcRlysncd.png" in image_markdown
-    assert "Boards_abc123.assets/流程图_TFjowjZXghkRAkbUFnrcRlysncd.json" in json_markdown
+    assert "_Boards_abc123.assets/流程图_TFjowjZXghkRAkbUFnrcRlysncd.png" in image_markdown
+    assert "_Boards_abc123.assets/流程图_TFjowjZXghkRAkbUFnrcRlysncd.json" in json_markdown
 
     assert stub_client.download_calls == [
         "/open-apis/board/v1/whiteboards/TFjowjZXghkRAkbUFnrcRlysncd/download_as_image"
@@ -229,6 +234,41 @@ def test_materialize_whiteboards_downloads_assets_to_sidecar(tmp_path: Path):
     assert stub_client.get_calls == [
         "/open-apis/board/v1/whiteboards/TFjowjZXghkRAkbUFnrcRlysncd/nodes"
     ]
+
+
+def test_host_assets_root_respects_assets_dir_mode(tmp_path: Path):
+    prefixed_config = LarkSyncConfig(storage=StorageSettings(root=tmp_path, assets_dir_mode="prefixed"))
+    plain_config = LarkSyncConfig(storage=StorageSettings(root=tmp_path, assets_dir_mode="plain"))
+    hidden_config = LarkSyncConfig(storage=StorageSettings(root=tmp_path, assets_dir_mode="hidden"))
+
+    prefixed = _build_downloader(tmp_path, config=prefixed_config)
+    plain = _build_downloader(tmp_path, config=plain_config)
+    hidden = _build_downloader(tmp_path, config=hidden_config)
+
+    markdown_path = prefixed.storage.target_path(Path("Boards/Boards_abc123.md"))
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+
+    prefixed_root = prefixed._host_assets_root(markdown_path)
+    plain_root = plain._host_assets_root(markdown_path)
+    hidden_root = hidden._host_assets_root(markdown_path)
+
+    assert prefixed_root.name == "_Boards_abc123.assets"
+    assert plain_root.name == "Boards_abc123.assets"
+    assert hidden_root.name == ".Boards_abc123.assets"
+    assert not prefixed_root.exists()
+    assert not plain_root.exists()
+    assert not hidden_root.exists()
+
+
+def test_doc_without_resources_does_not_create_assets_dir(tmp_path: Path):
+    downloader = _build_downloader(tmp_path)
+    markdown_path = downloader.storage.target_path(Path("Simple/Simple_abc123.md"))
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+
+    assets_root = downloader._host_assets_root(markdown_path)
+
+    assert assets_root.name == "_Simple_abc123.assets"
+    assert not assets_root.exists()
 
 
 def test_file_downloader_prefers_original_filename_for_reference_download(tmp_path: Path):
