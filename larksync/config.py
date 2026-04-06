@@ -13,7 +13,7 @@ __all__ = [
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, MutableMapping, Optional
+from typing import Any, Dict, Iterable, Literal, Mapping, MutableMapping, Optional
 
 try:
     import tomllib  # Python 3.11+
@@ -57,6 +57,10 @@ class StorageSettings(BaseModel):
     nested_dir: str = Field(default="nested_docs", description="Directory to store nested documents")
     images_dir: str = Field(default="images", description="Directory to store downloaded images")
     attachments_dir: str = Field(default="attachments", description="Directory to store attachments")
+    assets_dir_mode: Literal["plain", "prefixed", "hidden"] = Field(
+        default="prefixed",
+        description="How sidecar asset directories are named: plain='name.assets', prefixed='_' + 'name.assets', hidden='.' + 'name.assets'",
+    )
     preserve_remote_structure: bool = Field(
         default=True, description="Whether to mirror the remote folder hierarchy locally"
     )

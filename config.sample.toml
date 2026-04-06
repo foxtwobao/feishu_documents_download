@@ -63,6 +63,12 @@ images_dir = "images"
 # 下载附件保存目录。
 attachments_dir = "attachments"
 
+# sidecar 资源目录命名方式：
+# - "plain":    文档名.assets
+# - "prefixed": _文档名.assets（默认，推荐用于 Obsidian）
+# - "hidden":   .文档名.assets（Linux/macOS 下通常隐藏）
+assets_dir_mode = "prefixed"
+
 # 是否尽量保留飞书的远端层级结构。
 preserve_remote_structure = true
 

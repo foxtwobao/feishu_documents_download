@@ -144,9 +144,15 @@ class DocxDownloader(BaseDownloader):
         return refer_root
 
     def _host_assets_root(self, markdown_path: Path) -> Path:
-        assets_root = markdown_path.parent / f"{markdown_path.stem}.assets"
-        assets_root.mkdir(parents=True, exist_ok=True)
-        return assets_root
+        mode = self.config.storage.assets_dir_mode
+        base_name = f"{markdown_path.stem}.assets"
+        if mode == "hidden":
+            dirname = f".{base_name}"
+        elif mode == "plain":
+            dirname = base_name
+        else:
+            dirname = f"_{base_name}"
+        return markdown_path.parent / dirname
 
     def _finalize_markdown(
         self,
