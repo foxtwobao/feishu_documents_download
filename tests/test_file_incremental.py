@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from larksync.config import StorageSettings
-from larksync.core.space_sync import DriveSpaceSynchronizer, SpaceSyncContext
+from larksync.core.space_sync import DriveSpaceSynchronizer, PlannedFile, SpaceSyncContext
 from larksync.storage import StorageManager
 from larksync.storage.metadata_store import MetadataStore
 from larksync.utils.time import normalize_timestamp
@@ -379,12 +379,80 @@ def test_expected_local_path_keeps_suffix(tmp_path):
     dotted_name = "CCPG.C1025战略规划务虚会.行业趋势模块"
     parent = Path("战略管理会议")
     result = syncer._expected_local_path("test_token", "slides", dotted_name, parent)
-    assert result == parent / f"{dotted_name}.md"
+    assert result == parent / f"{dotted_name}_test_token.md"
 
     numeric_prefix = "4.长城物业数字化设计项目_二阶段工作细化_0305"
     nested_parent = Path("战略管理会议/数字化战略")
     result2 = syncer._expected_local_path("token2", "slides", numeric_prefix, nested_parent)
-    assert result2 == nested_parent / f"{numeric_prefix}.md"
+    assert result2 == nested_parent / f"{numeric_prefix}_token2.md"
+
+
+def test_space_sync_builds_unique_resolved_paths_for_tree_nodes(tmp_path):
+    storage_settings = StorageSettings(root=tmp_path)
+    storage = StorageManager(storage_settings)
+    metadata = MetadataStore(storage.root)
+
+    context = SpaceSyncContext(
+        engine=MagicMock(),
+        drive=MagicMock(),
+        registry=MagicMock(),
+        storage=storage,
+    )
+
+    syncer = DriveSpaceSynchronizer(
+        context,
+        metadata,
+        limit=None,
+        incremental=True,
+        plan_only=True,
+    )
+
+    planned = [
+        PlannedFile(
+            token="shortcut-a",
+            actual_token="doc-token",
+            raw_type="docx",
+            file_type="docx",
+            name="文档A",
+            parent_path=Path("Root"),
+            modified_time=None,
+            source_url=None,
+            expected_local_path=Path("Root/文档A_doc-token.md"),
+            current_meta={},
+            extra={},
+        ),
+        PlannedFile(
+            token="shortcut-b",
+            actual_token="doc-token",
+            raw_type="docx",
+            file_type="docx",
+            name="文档A",
+            parent_path=Path("Elsewhere"),
+            modified_time=None,
+            source_url=None,
+            expected_local_path=Path("Elsewhere/文档A_doc-token.md"),
+            current_meta={},
+            extra={},
+        ),
+        PlannedFile(
+            token="sheet-token",
+            actual_token="sheet-token",
+            raw_type="sheet",
+            file_type="sheet",
+            name="数据表",
+            parent_path=Path("Root"),
+            modified_time=None,
+            source_url=None,
+            expected_local_path=Path("Root/数据表_sheet-token.xlsx"),
+            current_meta={},
+            extra={},
+        ),
+    ]
+
+    resolved = syncer._build_resolved_obj_paths(planned)
+
+    assert "doc-token" not in resolved
+    assert resolved["sheet-token"] == Path("Root/数据表_sheet-token.xlsx")
 
 
 if __name__ == "__main__":
