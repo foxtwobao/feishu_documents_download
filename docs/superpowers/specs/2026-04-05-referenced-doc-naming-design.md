@@ -50,17 +50,19 @@
 - 白板导出图 / JSON
 - 其他块级资源文件
 
-推荐 sidecar 目录命名：
+推荐 sidecar 目录命名由配置项 `storage.assets_dir_mode` 控制：
 
 ```text
-<doc_filename>.assets/
+plain     -> <doc_filename>.assets/
+prefixed  -> _<doc_filename>.assets/
+hidden    -> .<doc_filename>.assets/
 ```
 
-例如：
+默认值使用 `prefixed`。例如：
 
 ```text
 需求文档_abc123.md
-需求文档_abc123.assets/
+_需求文档_abc123.assets/
 ```
 
 这样在 Obsidian 中：
@@ -127,7 +129,7 @@ Vault/
 Vault/
   项目资料/
     A_aaa111.md
-    A_aaa111.assets/
+    _A_aaa111.assets/
       架构图_img001.png
       合同附件_file123.pdf
       白板_blk888.png
@@ -186,7 +188,7 @@ Vault/
 
 则规则是：
 
-- 落到宿主文档 `.assets/` 目录；
+- 落到宿主文档对应的 sidecar assets 目录；
 - 不进入全局 `refer/`。
 
 ---
@@ -209,12 +211,12 @@ Vault/
 - 优先保留原始文件名；
 - 若原始文件名冲突或不可得，则使用 `{safe_name}_{token}{ext}`。
 
-### 进入 `.assets/` 的 file
+### 进入 sidecar assets 的 file
 
 当 file 是宿主文档的附件块 / 内嵌资源时：
 
 - 跟宿主文档走；
-- 落到 `<doc>.assets/`；
+- 落到宿主文档对应的 sidecar assets 目录；
 - 不进入 `refer/`。
 
 一句话：
@@ -239,7 +241,7 @@ Vault/
 {sanitized_title}_{token}.xlsx
 ```
 
-### `.assets/` 中资源类对象
+### sidecar assets 中资源类对象
 
 优先级如下：
 
@@ -286,8 +288,8 @@ Vault/
 
 则：
 
-- 资源落 `A_aaa111.assets/`；
-- A 链接自己的 `.assets/` 中对应资源。
+- 资源落当前配置模式对应的 sidecar 目录；
+- A 链接自己的 sidecar 目录中对应资源。
 
 ---
 
@@ -373,7 +375,7 @@ refer/
 
 1. 飞书树节点继续按主树结构落盘；
 2. 独立云文档引用统一进入 flat `refer/`；
-3. 宿主文档资源统一进入 `<doc>.assets/`；
+3. 宿主文档资源统一进入 sidecar assets 目录，默认命名为 `_<doc>.assets/`；
 4. A 引 B 且 B 在树中时，B 不进入 `refer/`；
 5. A 引树外独立云文档时，目标进入 `refer/`；
 6. `file` 类型能按“独立对象 / 宿主资源”正确分流；

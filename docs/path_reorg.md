@@ -4,7 +4,7 @@
 
 1. **飞书树节点** → 主树
 2. **树外独立云文档引用** → 顶层 flat `refer/`
-3. **宿主文档资源** → `<doc>.assets/`
+3. **宿主文档资源** → 由 `storage.assets_dir_mode` 控制，默认 `_<doc>.assets/`
 
 ---
 
@@ -15,7 +15,7 @@
   <entry_tree>/
     <title>_<folder_token>/
       <title>_<doc_token>.md
-      <title>_<doc_token>.assets/
+      _<title>_<doc_token>.assets/
         <resource files>
 
   refer/
@@ -72,21 +72,29 @@
 
 ---
 
-# 4) `<doc>.assets/` 规则
+# 4) sidecar assets 规则
 
 宿主文档资源统一跟宿主文档走。
 
-目录名：
+目录名由 `storage.assets_dir_mode` 控制：
 
 ```text
-<doc_filename_without_ext>.assets/
+plain     -> <doc_filename_without_ext>.assets/
+prefixed  -> _<doc_filename_without_ext>.assets/
+hidden    -> .<doc_filename_without_ext>.assets/
 ```
 
-例如：
+默认推荐值是 `prefixed`，因为它：
+
+- 比普通目录更不抢眼；
+- 不会像 dot 目录一样被某些工具默认隐藏或忽略；
+- 更适合 Obsidian 日常浏览。
+
+例如（默认 `prefixed`）：
 
 ```text
 需求文档_abc123.md
-需求文档_abc123.assets/
+_需求文档_abc123.assets/
 ```
 
 这里放的是：
@@ -120,8 +128,8 @@
 
 ## 场景 C：A 引用的是资源类内容
 
-* 资源落 `A_xxx.assets/`
-* A 链接自己的 `.assets/` 目录中的真实文件
+* 资源落当前配置模式对应的 sidecar 目录
+* A 链接自己对应的 sidecar 目录中的真实文件
 
 ---
 
@@ -136,7 +144,7 @@
 
 ## 宿主资源型 file
 
-* 落 `<doc>.assets/`
+* 落当前配置模式对应的 sidecar 目录
 * 与图片/附件块同等处理
 
 ---

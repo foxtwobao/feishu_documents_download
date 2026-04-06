@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 让下载结果更适合在 Obsidian 中直接使用：主树保持飞书结构，独立云文档引用统一 flat 到 `refer/`，资源类内容落到宿主文档 `<doc>.assets/`，并支持对象在“树节点 / 引用对象”之间切换时的路径迁移。
+**Goal:** 让下载结果更适合在 Obsidian 中直接使用：主树保持飞书结构，独立云文档引用统一 flat 到 `refer/`，资源类内容落到宿主文档 sidecar assets 目录（默认 `_<doc>.assets/`），并支持对象在“树节点 / 引用对象”之间切换时的路径迁移。
 
 **Architecture:** 路径策略由“按类型固定 refer 落盘”改为“按语义来源分流”：
 
 - 飞书树节点 → 主树
 - 独立云文档引用 → flat `refer/`
-- 宿主文档资源 → `<doc>.assets/`
+- 宿主文档资源 → sidecar assets（由 `storage.assets_dir_mode` 控制，默认 `prefixed`）
 
 **Tech Stack:** Python 3.11+, pytest
 
@@ -43,7 +43,7 @@
 
 - 飞书树节点保持主树结构；
 - 独立云文档引用统一进入顶层 flat `refer/`；
-- 图片/附件/白板等资源进入宿主文档 `<doc>.assets/`；
+- 图片/附件/白板等资源进入宿主文档 sidecar assets；
 - `file` 类型按“独立对象 / 宿主资源”分流。
 
 ---
@@ -144,7 +144,7 @@ def test_same_refer_token_is_reused_across_multiple_docs(...)
 
 ---
 
-## Task 4: 改造宿主资源为 `<doc>.assets/`
+## Task 4: 改造宿主资源为可配置 sidecar assets
 
 **Files:**
 - Modify: `larksync/core/downloaders/docx_downloader.py`
@@ -153,10 +153,10 @@ def test_same_refer_token_is_reused_across_multiple_docs(...)
 
 - [ ] **Step 1: 定义 sidecar 目录规则**
 
-宿主文档 `A_aaa111.md` 的资源目录统一为：
+宿主文档 `A_aaa111.md` 的资源目录由 `storage.assets_dir_mode` 控制，默认：
 
 ```text
-A_aaa111.assets/
+_A_aaa111.assets/
 ```
 
 不要再使用：
@@ -265,7 +265,7 @@ def test_tree_node_moves_to_refer_when_it_is_no_longer_in_tree(...)
 - [ ] **Step 1: 定义两种 file 语义**
 
 1. 独立对象型 file → `refer/`
-2. 宿主资源型 file → `<doc>.assets/`
+2. 宿主资源型 file → sidecar assets
 
 - [ ] **Step 2: 调整最终文件名逻辑**
 
@@ -297,7 +297,7 @@ def test_file_preserves_original_filename_when_available(...)
 
 - A 引主树中的 B → 链到主树 `.md`
 - A 引树外云文档 → 链到 `refer/*.md|xlsx`
-- A 引宿主资源 → 链到 `A_aaa111.assets/...`
+- A 引宿主资源 → 链到当前配置模式下的 sidecar assets 路径
 
 - [ ] **Step 2: 写测试**
 
@@ -319,7 +319,7 @@ Run: `pytest tests/ -v --tb=short`
 
 1. 飞书树节点按主树结构落盘；
 2. 独立云文档引用统一 flat 进入 `refer/`；
-3. 宿主资源统一进入 `<doc>.assets/`；
+3. 宿主资源统一进入 sidecar assets 目录，默认命名为 `_<doc>.assets/`；
 4. A 引 B 且 B 在树中时，B 不进入 `refer/`；
 5. A 引树外独立云文档时，目标进入 `refer/`；
 6. `file` 类型能够按“独立对象 / 宿主资源”分流；
