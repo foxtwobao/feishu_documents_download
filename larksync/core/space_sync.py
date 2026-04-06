@@ -87,6 +87,7 @@ class DriveSpaceSynchronizer:
         # 格式: {parent_path_posix: {filename: token, ...}, ...}
         self._path_registry: Dict[str, Dict[str, str]] = {}
         self._entry_root: Optional[Path] = None
+        self._resolved_obj_paths: Dict[str, Path] = {}
         self._summary: Dict[str, Any] = {
             "root": {},
             "total_files": 0,
@@ -116,6 +117,7 @@ class DriveSpaceSynchronizer:
         self._expected_total = 0
         self._discovery_truncated = False
         self._user_identity = self._fetch_user_identity()
+        self._resolved_obj_paths = {}
         # 从 metadata 加载已有的路径注册表，保持已有文件的路径不变
         self._path_registry = self._load_existing_path_registry()
 
@@ -171,6 +173,7 @@ class DriveSpaceSynchronizer:
             self._pending_limit = []
 
         self._download_total = len(download_queue)
+        self._resolved_obj_paths = self._build_resolved_obj_paths(download_queue)
         self._summary["total_files"] = self._total_discovered
         self._summary["total_folders"] = self._processed_folders
         self._summary["will_download"] = self._download_total
@@ -533,17 +536,21 @@ class DriveSpaceSynchronizer:
             self._register_shortcut_mapping(token, actual_token, effective_type)
 
     def _perform_downloads(self, queue: List[PlannedFile]) -> None:
+        serialized_paths = self._serialize_resolved_paths(self._resolved_obj_paths)
         for index, item in enumerate(queue, start=1):
             processed_before = index - 1
             self._notify_download_progress("start", item, processed_before, None)
             # 从 expected_local_path 提取输出文件名（可能带 token 后缀）
             output_filename = item.expected_local_path.name if item.expected_local_path else None
+            extra = dict(item.extra) if item.extra else {}
+            if serialized_paths:
+                extra["_resolved_paths"] = serialized_paths
             task = SyncTask(
                 token=item.actual_token,
                 file_type=item.file_type,
                 name=item.name,
                 parent_path=item.parent_path,
-                extra=item.extra if item.extra else {},
+                extra=extra,
                 output_filename=output_filename,
             )
             try:
@@ -583,6 +590,22 @@ class DriveSpaceSynchronizer:
                 self._current_tokens.add(item.token)
                 # 注册快捷方式映射关系
                 self._register_shortcut_mapping(item.token, item.actual_token, item.file_type)
+
+    def _build_resolved_obj_paths(self, queue: List[PlannedFile]) -> Dict[str, Path]:
+        path_sets: Dict[str, Set[Path]] = {}
+        for item in queue:
+            if item.actual_token and item.expected_local_path is not None:
+                path_sets.setdefault(item.actual_token, set()).add(item.expected_local_path)
+
+        resolved: Dict[str, Path] = {}
+        for token, paths in path_sets.items():
+            if len(paths) == 1:
+                resolved[token] = next(iter(paths))
+        return resolved
+
+    @staticmethod
+    def _serialize_resolved_paths(mapping: Mapping[str, Path]) -> Dict[str, str]:
+        return {token: path.as_posix() for token, path in mapping.items()}
 
     def _notify_download_progress(
         self,

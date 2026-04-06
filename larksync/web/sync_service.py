@@ -47,6 +47,51 @@ logger = logging.getLogger(__name__)
 _AUTH_ERROR_CODES = {20005, 20006, 99991663, 99991668}
 
 
+def _extract_payload_error_code(payload: object) -> Optional[int]:
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("code")
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _contains_auth_error_markers(text: str) -> bool:
+    markers = (
+        "invalid access token",
+        "access token invalid",
+        "access token expired",
+        "token expired",
+        "token is expired",
+        "token has expired",
+        "access token is invalid",
+        "invalid tenant access token",
+        "access token无效",
+        "access token 过期",
+        "token无效",
+        "token过期",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _is_invalid_access_token_error(error: FeishuAPIError) -> bool:
+    message = (error.message or "").lower()
+    payload = error.payload or {}
+    payload_msg = str(payload.get("msg") or "").lower()
+    payload_code = _extract_payload_error_code(payload)
+    combined = f"{message} {payload_msg}"
+    if payload_code in _AUTH_ERROR_CODES:
+        return True
+    if error.status_code == 400:
+        return _contains_auth_error_markers(combined)
+    if error.status_code == 401:
+        return _contains_auth_error_markers(combined)
+    return False
+
+
 def build_downloader_registry() -> DownloaderRegistry:
     """Build a standard downloader registry."""
     from ..core.downloaders import (
@@ -89,6 +134,7 @@ class UserAPIClient(FeishuAPIClient):
         rate_limit: Optional[RateLimitSettings] = None,
         base_url: str = "https://open.feishu.cn",
         timeout: float = 30.0,
+        refresh_callback: Optional[Callable[[], Optional[str]]] = None,
     ):
         # Create a minimal AuthSettings with the user token
         auth = AuthSettings(user_access_token=user_access_token)
@@ -103,12 +149,34 @@ class UserAPIClient(FeishuAPIClient):
             enable_auto_refresh=False,  # Disable CLI token manager
         )
         
-        # Store the token directly
         self._user_token = user_access_token
+        self._refresh_callback = refresh_callback
 
     def _get_valid_user_token(self) -> Optional[str]:
         """Override to return the user's token directly."""
         return self._user_token
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: Optional[Dict[str, Any]] = None,
+        json: Optional[Dict[str, Any]] = None,
+        data: Optional[Dict[str, Any]] = None,
+        stream: bool = False,
+    ) -> httpx.Response:
+        try:
+            return super()._request(method, path, params=params, json=json, data=data, stream=stream)
+        except FeishuAPIError as exc:
+            if self._refresh_callback is None or not _is_invalid_access_token_error(exc):
+                raise
+            new_token = self._refresh_callback()
+            if not new_token or new_token == self._user_token:
+                raise
+            logger.info("Retrying request after refreshing user access token")
+            self._user_token = new_token
+            return super()._request(method, path, params=params, json=json, data=data, stream=stream)
 
 
 class WebProgressTracker:
@@ -357,7 +425,7 @@ class UserSyncService:
                     return self._mark_auth_required(sync_run, db, "Access token expired and refresh failed")
 
             progress_tracker.start()
-            api_client = self._build_api_client()
+            api_client = self._build_api_client(db)
             summary = self._run_sync(api_client, progress_tracker)
             progress_tracker.finish(self.user_storage_root, summary)
 
@@ -396,12 +464,13 @@ class UserSyncService:
         finally:
             pass
 
-    def _build_api_client(self) -> UserAPIClient:
+    def _build_api_client(self, db: Session) -> UserAPIClient:
         """Build API client with user's access token."""
         return UserAPIClient(
             user_access_token=self.user.access_token,
             retry=self.app_config.retry,
             rate_limit=self.app_config.rate_limit,
+            refresh_callback=lambda: self._refresh_user_token_value(db),
         )
 
     def _build_storage_manager(self) -> StorageManager:
@@ -452,19 +521,7 @@ class UserSyncService:
             metadata_store.flush()
 
     def _is_invalid_access_token_error(self, error: FeishuAPIError) -> bool:
-        message = (error.message or "").lower()
-        payload = error.payload or {}
-        payload_msg = str(payload.get("msg") or "").lower()
-        payload_code = self._extract_payload_error_code(payload)
-        combined = f"{message} {payload_msg}"
-        if payload_code in _AUTH_ERROR_CODES:
-            return True
-        if error.status_code == 400:
-            return self._contains_auth_error_markers(combined)
-        if error.status_code == 401:
-            if self._contains_auth_error_markers(combined):
-                return True
-        return False
+        return _is_invalid_access_token_error(error)
 
     def _is_auth_related_exception(self, error: Exception) -> bool:
         if isinstance(error, FeishuAPIError):
@@ -479,33 +536,11 @@ class UserSyncService:
 
     @staticmethod
     def _contains_auth_error_markers(text: str) -> bool:
-        markers = (
-            "invalid access token",
-            "access token invalid",
-            "access token expired",
-            "token expired",
-            "token is expired",
-            "token has expired",
-            "access token is invalid",
-            "invalid tenant access token",
-            "access token无效",
-            "access token 过期",
-            "token无效",
-            "token过期",
-        )
-        return any(marker in text for marker in markers)
+        return _contains_auth_error_markers(text)
 
     @staticmethod
     def _extract_payload_error_code(payload: object) -> Optional[int]:
-        if not isinstance(payload, dict):
-            return None
-        value = payload.get("code")
-        if value is None:
-            return None
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return None
+        return _extract_payload_error_code(payload)
 
     @staticmethod
     def _extract_error_code_from_message(message: str) -> Optional[int]:
@@ -546,7 +581,7 @@ class UserSyncService:
     ) -> Dict[str, Any]:
         self._reset_run_for_retry(sync_run, db, progress_tracker)
         try:
-            api_client = self._build_api_client()
+            api_client = self._build_api_client(db)
             summary = self._run_sync(api_client, progress_tracker)
             progress_tracker.finish(self.user_storage_root, summary)
             self.sync_config.last_run_at = datetime.now(timezone.utc)
@@ -600,6 +635,12 @@ class UserSyncService:
         db.commit()
         logger.info("Refreshed access token for user", extra={"user_id": self.user.id})
         return True
+
+    def _refresh_user_token_value(self, db: Session) -> Optional[str]:
+        refreshed = self._refresh_user_token(db)
+        if not refreshed:
+            return None
+        return self.user.access_token
 
     def _should_refresh_before_start(self) -> bool:
         if not self.user.refresh_token or not self.user.token_expires_at:
