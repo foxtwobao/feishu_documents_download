@@ -18,7 +18,14 @@ from urllib.parse import unquote
 import httpx
 
 from ...utils.filesystem import safe_add_suffix, sanitize_filename
-from ..reference_cache import lookup_resolved_path, register_resolved_path
+from ..reference_cache import (
+    MISSING,
+    lookup_resolved_path,
+    lookup_wiki_node,
+    lookup_wiki_title,
+    register_resolved_path,
+    register_wiki_node,
+)
 from ..api_client import FeishuAPIError
 from ..models import SyncTask
 from ..parsers.docx_parser import (
@@ -57,6 +64,24 @@ class DocxDownloader(BaseDownloader):
         "sheets": "sheet",
         "sheet": "sheet",
         "base": "bitable",
+        "mindnotes": "mindnote",
+        "slides": "slides",
+        "file": "file",
+    }
+    # 知识库节点链接：/wiki/<node_token>，排除 /wiki/space/... 等非节点路径
+    _WIKI_REFERENCE_PATTERN = re.compile(
+        r"https://[^/]+/wiki/([A-Za-z0-9]+)(?![A-Za-z0-9/])",
+        re.IGNORECASE,
+    )
+    # get_node 返回的 obj_type → 下载器类型
+    _WIKI_OBJ_TYPE_MAP = {
+        "doc": "docx",
+        "docx": "docx",
+        "sheet": "sheet",
+        "sheets": "sheet",
+        "bitable": "bitable",
+        "base": "bitable",
+        "mindnote": "mindnote",
         "mindnotes": "mindnote",
         "slides": "slides",
         "file": "file",
@@ -106,7 +131,15 @@ class DocxDownloader(BaseDownloader):
         self._cleanup_stale_refer_copy(task.token, markdown_path)
         register_resolved_path(task.token, markdown_path)
 
-        references = self._extract_references(parse_result)
+        # 达到嵌套深度上限时不会下载引用，也就无需调用 get_node 解析 wiki 链接
+        max_depth = self.config.sync.max_nested_depth
+        at_depth_limit = max_depth is not None and depth >= max_depth
+        wiki_aliases: Dict[str, Set[str]] = {}
+        references = self._extract_references(
+            parse_result,
+            wiki_aliases=wiki_aliases,
+            resolve_wiki=not at_depth_limit,
+        )
         referenced = self._download_referenced_docx(
             references,
             refer_root,
@@ -116,7 +149,7 @@ class DocxDownloader(BaseDownloader):
             markdown_path,
         )
         if referenced:
-            self._replace_reference_links(markdown_path, referenced)
+            self._replace_reference_links(markdown_path, referenced, wiki_aliases=wiki_aliases)
 
     # ------------------------------------------------------------------ helpers
 
@@ -686,16 +719,37 @@ class DocxDownloader(BaseDownloader):
 
         return substitutions
 
-    def _extract_references(self, parse_result: DocxParseResult) -> List[Tuple[str, str, Optional[str]]]:
+    def _extract_references(
+        self,
+        parse_result: DocxParseResult,
+        *,
+        wiki_aliases: Optional[Dict[str, Set[str]]] = None,
+        resolve_wiki: bool = True,
+    ) -> List[Tuple[str, str, Optional[str]]]:
+        """收集可递归下载的引用。
+
+        wiki 链接（/wiki/<node_token>）会通过 get_node 解析为真实的
+        (obj_type, obj_token)，再按普通引用处理。解析出的 node_token 记录到
+        ``wiki_aliases[obj_token]``，供后续改写链接时使用。
+        """
         seen: Set[Tuple[str, str]] = set()
         references: List[Tuple[str, str, Optional[str]]] = []
         for link in parse_result.nested_links:
             match = self._REFERENCE_PATTERN.search(link)
-            if not match:
-                continue
-            raw_type = match.group(1).lower()
-            token = match.group(2)
-            doc_type = self._TYPE_MAP.get(raw_type)
+            if match:
+                doc_type = self._TYPE_MAP.get(match.group(1).lower())
+                token = match.group(2)
+            else:
+                wiki_match = self._WIKI_REFERENCE_PATTERN.search(link)
+                if not wiki_match or not resolve_wiki:
+                    continue
+                node_token = wiki_match.group(1)
+                resolved = self._resolve_wiki_node(node_token)
+                if resolved is None:
+                    continue
+                doc_type, token = resolved
+                if wiki_aliases is not None:
+                    wiki_aliases.setdefault(token, set()).add(node_token)
             if not doc_type:
                 continue
             key = (doc_type, token)
@@ -704,6 +758,51 @@ class DocxDownloader(BaseDownloader):
             seen.add(key)
             references.append((doc_type, token, link))
         return references
+
+    def _resolve_wiki_node(self, node_token: str) -> Optional[Tuple[str, str]]:
+        """把 wiki 节点 token 解析为 (下载器类型, obj_token)，失败返回 None。"""
+        cached = lookup_wiki_node(node_token)
+        if cached is not MISSING:
+            if cached is None:
+                return None
+            doc_type, obj_token, _title = cached
+            return doc_type, obj_token
+
+        try:
+            payload = self.client.get(
+                "/open-apis/wiki/v2/spaces/get_node",
+                params={"token": node_token},
+            )
+        except FeishuAPIError as exc:
+            self._logger.warning(
+                "Failed to resolve referenced wiki node; keep original link",
+                extra={
+                    "wiki_token": node_token,
+                    "status_code": exc.status_code,
+                    "error_message": exc.message,
+                },
+            )
+            register_wiki_node(node_token, None)
+            return None
+
+        node = (payload.get("data") or {}).get("node") or {}
+        obj_type = str(node.get("obj_type") or "").lower()
+        obj_token = node.get("obj_token")
+        doc_type = self._WIKI_OBJ_TYPE_MAP.get(obj_type)
+        if not doc_type or not isinstance(obj_token, str) or not obj_token:
+            self._logger.warning(
+                "Unsupported referenced wiki node; keep original link",
+                extra={"wiki_token": node_token, "obj_type": obj_type or None},
+            )
+            register_wiki_node(node_token, None)
+            return None
+
+        title = node.get("title")
+        register_wiki_node(
+            node_token,
+            (doc_type, obj_token, str(title) if title else None),
+        )
+        return doc_type, obj_token
 
     def _download_referenced_docx(
         self,
@@ -924,7 +1023,7 @@ class DocxDownloader(BaseDownloader):
             for key in ("name", "title"):
                 if meta.get(key):
                     return str(meta[key])
-        return token
+        return lookup_wiki_title(token) or token
 
     def _resolve_reference_output(
         self,
@@ -965,7 +1064,13 @@ class DocxDownloader(BaseDownloader):
             return newest
         return None
 
-    def _replace_reference_links(self, markdown_path: Path, downloads: Iterable[ReferencedDownload]) -> None:
+    def _replace_reference_links(
+        self,
+        markdown_path: Path,
+        downloads: Iterable[ReferencedDownload],
+        *,
+        wiki_aliases: Optional[Mapping[str, Set[str]]] = None,
+    ) -> None:
         text = markdown_path.read_text(encoding="utf-8")
         updated = text
         processed: Set[str] = set()
@@ -983,6 +1088,14 @@ class DocxDownloader(BaseDownloader):
                 replacement_url=replacement_url,
                 original_url=entry.url,
             )
+            # 同一对象可能被多个 wiki 节点链接（或同一节点的不同 URL 写法）引用
+            for node_token in sorted((wiki_aliases or {}).get(entry.token, ())):
+                updated = self._substitute_reference_occurrences(
+                    updated,
+                    token=node_token,
+                    replacement_url=replacement_url,
+                    original_url=None,
+                )
 
         if updated != text:
             markdown_path.write_text(updated, encoding="utf-8")
@@ -1011,11 +1124,11 @@ class DocxDownloader(BaseDownloader):
     ) -> str:
         patterns = [
             re.compile(
-                rf"https://[^/]+/(?:docx|docs|doc|sheet|sheets|base|bitable|mindnotes|mindnote|slides|file)/{re.escape(token)}[^\s)\]]*",
+                rf"https://[^/]+/(?:docx|docs|doc|sheet|sheets|base|bitable|mindnotes|mindnote|slides|file|wiki)/{re.escape(token)}[^\s)\]]*",
                 re.IGNORECASE,
             ),
             re.compile(
-                rf"<https://[^/]+/(?:docx|docs|doc|sheet|sheets|base|bitable|mindnotes|mindnote|slides|file)/{re.escape(token)}[^>]*>",
+                rf"<https://[^/]+/(?:docx|docs|doc|sheet|sheets|base|bitable|mindnotes|mindnote|slides|file|wiki)/{re.escape(token)}[^>]*>",
                 re.IGNORECASE,
             ),
         ]

@@ -289,3 +289,137 @@ def test_file_downloader_falls_back_to_readable_name_when_header_missing(tmp_pat
     filename = downloader._resolve_reference_filename(response, task)
 
     assert filename == "合同附件_file123.pdf"
+
+
+# ---------------------------------------------------------------- wiki references
+
+
+class _StubWikiClient:
+    """Fake FeishuAPIClient answering get_node from a node_token -> node mapping."""
+
+    def __init__(self, nodes: dict[str, dict | Exception]) -> None:
+        self._nodes = nodes
+        self.calls: list[str] = []
+
+    def get(self, path: str, params=None):
+        assert path == "/open-apis/wiki/v2/spaces/get_node"
+        token = (params or {})["token"]
+        self.calls.append(token)
+        node = self._nodes[token]
+        if isinstance(node, Exception):
+            raise node
+        return {"data": {"node": node}}
+
+
+def test_extract_references_resolves_wiki_links_to_underlying_objects(tmp_path: Path):
+    from larksync.core.parsers.docx_parser import DocxParseResult
+
+    clear_cache()
+    client = _StubWikiClient(
+        {
+            "WikiDoc1": {"obj_type": "docx", "obj_token": "DocObj1", "title": "知识库文档"},
+            "WikiSheet": {"obj_type": "sheet", "obj_token": "SheetObj", "title": "预算表"},
+        }
+    )
+    downloader = _build_downloader(tmp_path, client=cast(FeishuAPIClient, client))
+    parse_result = DocxParseResult(
+        markdown="",
+        nested_links=[
+            "https://foo.feishu.cn/docx/Plain111",
+            "https://foo.feishu.cn/wiki/WikiDoc1",
+            "https://foo.feishu.cn/wiki/WikiDoc1?from=from_copylink",
+            "https://foo.feishu.cn/wiki/WikiSheet#part",
+        ],
+    )
+
+    aliases: dict[str, set[str]] = {}
+    references = downloader._extract_references(parse_result, wiki_aliases=aliases)
+
+    assert references == [
+        ("docx", "Plain111", "https://foo.feishu.cn/docx/Plain111"),
+        ("docx", "DocObj1", "https://foo.feishu.cn/wiki/WikiDoc1"),
+        ("sheet", "SheetObj", "https://foo.feishu.cn/wiki/WikiSheet#part"),
+    ]
+    assert aliases == {"DocObj1": {"WikiDoc1"}, "SheetObj": {"WikiSheet"}}
+    # 同一节点只调用一次 get_node
+    assert client.calls == ["WikiDoc1", "WikiSheet"]
+    # wiki 标题作为引用文件名的兜底
+    assert downloader._resolve_reference_name({}, "docx", "DocObj1") == "知识库文档"
+
+
+def test_extract_references_keeps_unresolvable_wiki_links(tmp_path: Path):
+    from larksync.core.api_client import FeishuAPIError
+    from larksync.core.parsers.docx_parser import DocxParseResult
+
+    clear_cache()
+    client = _StubWikiClient(
+        {
+            "NoPerm": FeishuAPIError(403, "forbidden"),
+            "Unknown": {"obj_type": "whatever", "obj_token": "X"},
+        }
+    )
+    downloader = _build_downloader(tmp_path, client=cast(FeishuAPIClient, client))
+    parse_result = DocxParseResult(
+        markdown="",
+        nested_links=[
+            "https://foo.feishu.cn/wiki/NoPerm",
+            "https://foo.feishu.cn/wiki/Unknown",
+            "https://foo.feishu.cn/wiki/space/7012345",
+        ],
+    )
+
+    assert downloader._extract_references(parse_result) == []
+    # 失败结果也会缓存，不会重复请求；/wiki/space/... 不是节点链接
+    assert downloader._extract_references(parse_result) == []
+    assert client.calls == ["NoPerm", "Unknown"]
+
+
+def test_extract_references_skips_wiki_resolution_when_disabled(tmp_path: Path):
+    from larksync.core.parsers.docx_parser import DocxParseResult
+
+    clear_cache()
+    client = _StubWikiClient({})
+    downloader = _build_downloader(tmp_path, client=cast(FeishuAPIClient, client))
+    parse_result = DocxParseResult(markdown="", nested_links=["https://foo.feishu.cn/wiki/WikiDoc1"])
+
+    assert downloader._extract_references(parse_result, resolve_wiki=False) == []
+    assert client.calls == []
+
+
+def test_replace_reference_links_rewrites_wiki_aliases(tmp_path: Path):
+    downloader = _build_downloader(tmp_path)
+    markdown_path = downloader.storage.target_path(Path("Host/Host_hosttoken.md"))
+    markdown_path.parent.mkdir(parents=True, exist_ok=True)
+    markdown_path.write_text(
+        "\n".join(
+            [
+                "[知识库文档](https://foo.feishu.cn/wiki/WikiDoc1)",
+                "[再次引用](https://foo.feishu.cn/wiki/WikiDoc1?from=from_copylink)",
+                "[另一个节点](https://bar.feishu.cn/wiki/WikiDoc2)",
+                "裸链接 https://foo.feishu.cn/wiki/WikiDoc1",
+                "[无关链接](https://foo.feishu.cn/wiki/Other999)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    downloads = [
+        ReferencedDownload(
+            "docx",
+            "DocObj1",
+            "https://foo.feishu.cn/wiki/WikiDoc1",
+            tmp_path / "refer" / "知识库文档_DocObj1.md",
+        )
+    ]
+
+    downloader._replace_reference_links(
+        markdown_path,
+        downloads,
+        wiki_aliases={"DocObj1": {"WikiDoc1", "WikiDoc2"}},
+    )
+
+    content = markdown_path.read_text(encoding="utf-8")
+    assert "WikiDoc1" not in content
+    assert "WikiDoc2" not in content
+    assert content.count("../refer/知识库文档_DocObj1.md") == 4
+    assert "[无关链接](https://foo.feishu.cn/wiki/Other999)" in content
