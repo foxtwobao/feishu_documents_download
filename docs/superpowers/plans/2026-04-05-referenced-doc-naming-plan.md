@@ -1,7 +1,5 @@
 # 引用文档与资源落盘结构实现计划（Obsidian 优先）
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** 让下载结果更适合在 Obsidian 中直接使用：主树保持飞书结构，独立云文档引用统一 flat 到 `refer/`，资源类内容落到宿主文档 sidecar assets 目录（默认 `_<doc>.assets/`），并支持对象在“树节点 / 引用对象”之间切换时的路径迁移。
 
 **Architecture:** 路径策略由“按类型固定 refer 落盘”改为“按语义来源分流”：
